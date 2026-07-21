@@ -68,6 +68,9 @@ def chunk_playbook(filepath: Path) -> list[dict]:
     technique_ids = meta.get("technique_ids", [])
     severity = meta.get("severity", "Medium")
     source_doc = meta.get("source_doc", filepath.stem)
+    # doc_type: playbook (default, threat playbook ที่ทีมเขียน) | defense (เอกสารรายเทคนิค) | mitre (MITRE Mitigations ทางการ)
+    # ตาม KB 3 ส่วนใน ARCHITECTURE.md §4.1 / proposal ขอบเขต §3.2
+    doc_type = meta.get("doc_type", "playbook")
 
     # Normalize technique_ids เป็น list เสมอ
     if isinstance(technique_ids, str):
@@ -102,6 +105,7 @@ def chunk_playbook(filepath: Path) -> list[dict]:
                         "technique_source": "sub" if current_sub_techs else "playbook",
                         "severity": severity,
                         "source_doc": source_doc,
+                        "doc_type": doc_type,
                         "chunk_type": f"{current_phase}_{current_sub}",
                     }
                 })
@@ -171,8 +175,9 @@ def main():
     )
     console.print(f"[green]✅ สร้าง collection '{COLLECTION_NAME}' ใหม่[/green]\n")
 
-    # อ่านและ chunk ทุก playbook
-    all_playbook_files = sorted(PLAYBOOKS_DIR.glob("*.md"))
+    # อ่านและ chunk ทุก playbook — rglob เพื่อให้เก็บ subfolder ด้วย
+    # (เช่น playbooks/defense/*.md, playbooks/mitre/*.md ตาม KB 3 ส่วน)
+    all_playbook_files = sorted(PLAYBOOKS_DIR.rglob("*.md"))
     if not all_playbook_files:
         console.print("[red]❌ ไม่พบไฟล์ .md ใน playbooks/[/red]")
         return

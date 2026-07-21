@@ -5,58 +5,27 @@ severity: Medium
 source_doc: Brute_Force_IR_Playbook_v1
 ---
 
-## Phase: preparation
-### Sub: tool_readiness
-- เตรียม **fail2ban** หรือ **Windows Account Lockout Policy** กำหนด lockout หลัง 5 ครั้ง
-- ติดตั้ง **Hydra / Medusa** บน sandbox สำหรับ simulate brute force และทดสอบ detection
-- เตรียม **GoAccess** หรือ script parse auth log (`/var/log/auth.log`, `/var/log/secure`)
-- มี access ไปยัง **Active Directory Audit Log** (Event ID 4625, 4740, 4771)
-- เตรียม **GeoIP lookup tool** (MaxMind GeoLite2) สำหรับระบุประเทศของ source IP
-- ติดตั้ง **Duo Security MFA** หรือ **Azure AD MFA** สำหรับ remediation ฉุกเฉิน
-- เตรียม **password reset workflow** ที่ผ่าน out-of-band verification (SMS/email ที่ไม่ได้ compromise)
+## เอกสารอ้างอิง — Preparation, Detection & Post-Incident Review (ไม่ถูก ingest เป็น RAG chunk)
 
-### Sub: team_roles
-- **Incident Commander**: ตัดสินใจ lockout account หรือ block IP ระดับ network
-- **SOC Analyst (L2)**: monitor auth log แบบ real-time, ยืนยัน brute force pattern
-- **Active Directory Admin**: reset password, unlock account, ตรวจสอบ group membership ที่เปลี่ยนแปลง
-- **Network Engineer**: block source IP ที่ Firewall/ISP level
-- **Application Owner**: ตรวจสอบ application login log, ยืนยัน account ที่สำเร็จ login
-- **Help Desk**: รับแจ้งจาก user ที่ account ถูก lockout และ verify identity ก่อน unlock
+> ขอบเขต proposal §3.3 กำหนดให้ playbook เชิงรับมีแค่ 3 phase: Containment / Eradication / Recovery
+> เนื้อหา Preparation กับ Detection เดิมยังมีคุณค่าอยู่ (ทีมเขียนเอง) จึงเก็บไว้เป็นเอกสารอ้างอิงตรงนี้แทน
+> ไม่ได้อยู่ใต้ `## Phase:` จึงไม่ถูก `01_ingest.py` ดึงเข้า ChromaDB — อ่านเป็นบริบทประกอบเท่านั้น
+> (ส่วน detection signal เช่น log source/IOC list เหมาะเอาไปใช้ต่อตอน implement CTI enrichment
+> หรือ NCSC severity assessment ในอนาคต ไม่ใช่ทิ้งไปเฉยๆ)
 
-### Sub: comm_plan
-- แจ้ง **AD Admin** ทันทีเมื่อพบ account ถูก lockout > 10 accounts ในเวลาสั้น
-- ส่ง **P2 Alert** ไปยัง CISO หากพบว่า admin account ถูก target
-- ใช้ **Secure Channel** แจ้ง account ที่อาจถูก compromise ให้ reset password ทันที
-- แจ้ง **ISP** หากพบ botnet IP ขนาดใหญ่ เพื่อขอ block upstream
-- บันทึก **จำนวน account ที่ถูก lockout** และ IP ที่เกี่ยวข้องใน timeline
-- ประสาน **HR** หาก executive account ถูก target เพื่อแจ้งเตือนล่วงหน้า
+**Tool readiness:** เตรียม fail2ban / Windows Account Lockout Policy (lockout หลัง 5 ครั้ง), Hydra/Medusa บน sandbox สำหรับทดสอบ detection, GoAccess หรือ script parse auth log, access ไปยัง Active Directory Audit Log (Event ID 4625, 4740, 4771), GeoIP lookup tool (MaxMind GeoLite2), Duo/Azure AD MFA สำหรับ remediation ฉุกเฉิน, password reset workflow ที่ผ่าน out-of-band verification
 
-## Phase: detection
-### Sub: log_sources [T1110.001]
-- **Windows Security Event Log**: Event ID 4625 (logon failure), 4740 (account lockout), 4771 (Kerberos pre-auth failure)
-- **Linux auth log**: `/var/log/auth.log` (Debian/Ubuntu), `/var/log/secure` (RHEL/CentOS)
-- **SSH log**: `/var/log/auth.log` — ดู `Failed password for` และ `Invalid user`
-- **Web Application Log**: ดู POST /login endpoint ที่มี HTTP 401/403 ซ้ำจาก IP เดียว
-- **VPN Access Log** (Cisco ASA, Palo Alto): ดู authentication failure สำหรับ remote access
-- **RADIUS Log**: สำหรับ WiFi หรือ VPN ที่ใช้ RADIUS authentication
+**Team roles:** Incident Commander (ตัดสินใจ lockout/block IP ระดับ network), SOC Analyst L2 (monitor auth log real-time), AD Admin (reset password/unlock/ตรวจ group membership), Network Engineer (block source IP), Application Owner (ตรวจ login log), Help Desk (verify identity ก่อน unlock)
 
-### Sub: log_sources_spray [T1110.003]
-- **Azure AD / Entra ID Sign-in Log**: ดู `Sign-in risk` และ `Failure reason: Invalid username or password` — password spraying มักโจมตี cloud identity ก่อน
-- **Microsoft 365 Unified Audit Log**: `UserLoginFailed` จาก IP เดียวกระจายไปหลาย mailbox
-- **ADFS / Federation Log**: authentication failure จำนวนมากที่กระจายข้าม account แต่ password น้อยรอบ (สัญญาณ spray ไม่ใช่ brute force ตรงๆ)
+**Comm plan:** แจ้ง AD Admin ทันทีเมื่อ lockout > 10 accounts, ส่ง P2 Alert ไปยัง CISO ถ้า admin account ถูก target, ใช้ secure channel แจ้ง reset password, แจ้ง ISP ถ้าเจอ botnet IP ขนาดใหญ่, ประสาน HR ถ้า executive account ถูก target
 
-### Sub: ioc_list [T1110.001]
-- **High failure rate**: IP เดียว > 50 failed login ภายใน 5 นาที (threshold ปรับตาม baseline)
-- **Sequential username pattern**: ลอง admin, administrator, admin1, admin2, user1, user2
-- **Non-business hour activity**: login attempt ช่วง 02:00-05:00 จาก IP ต่างประเทศ
-- **Tor exit nodes / VPN IP**: IP ที่อยู่ใน known Tor exit node list หรือ commercial VPN ranges
-- **Logon Type 3 (Network)** จาก IP ที่ไม่เคยใช้มาก่อน (SSH/SMB/web auth)
-- **Kerberos Error Code 0x18** (KDC_ERR_PREAUTH_FAILED): บ่งบอก wrong password สำหรับ valid user
+**Log sources:** Windows Security Event Log (4625 logon failure, 4740 account lockout, 4771 Kerberos pre-auth failure), Linux auth log (`/var/log/auth.log`, `/var/log/secure`), Web Application Log (HTTP 401/403 ซ้ำจาก IP เดียว), VPN Access Log, RADIUS Log, Azure AD/Entra ID Sign-in Log (สำหรับ spraying), Microsoft 365 Unified Audit Log
 
-### Sub: ioc_list_spray [T1110.003]
-- **Password spray pattern**: password เดียว (เช่น `Summer2024!`) ยิงกระจายไปหลาย account — failed login ต่อ account น้อย แต่จำนวน account ที่โดนสูง
-- **Low-and-slow timing**: failed login เว้นระยะเพื่อเลี่ยง lockout threshold (เช่น 1 ครั้ง/account/ชั่วโมง)
-- **Breadth over depth**: จำนวน distinct username ที่ถูกลองสูงผิดปกติจาก source เดียว ในเวลาสั้น
+**IoC list:** High failure rate (>50 ครั้ง/5 นาทีต่อ IP), sequential username pattern (admin, administrator, admin1...), non-business hour activity, Tor exit node/VPN IP, Logon Type 3 จาก IP ใหม่, Kerberos Error 0x18 (guessing) / password spray pattern เดียวกระจายหลายบัญชี, low-and-slow timing (spraying)
+
+**Lessons learned (ทำหลังปิดเคส):** เช็คว่า Lockout Policy มีอยู่แล้วหรือไม่และทำไมไม่ block ทัน, MFA ถูก enforce กับบัญชีที่ถูก target หรือไม่, ประเมิน MTTD ว่า SIEM alert เร็วพอไหม, ผลกระทบต่อ business operations, มี password reuse ข้ามระบบหรือไม่
+
+**Improvements ที่ควรผลักดันต่อ:** บังคับ MFA ทุกบัญชีโดยเฉพาะ privileged ภายใน 30 วัน, เพิ่ม SIEM rule ตรวจ password spray pattern, deploy Identity Protection, ทำ Privileged Access Workstation (PAW), จัด training เรื่อง password manager
 
 ## Phase: containment
 ### Sub: short_term
@@ -109,17 +78,20 @@ source_doc: Brute_Force_IR_Playbook_v1
 - อัปเดต **SSH configuration**: ปิด `PasswordAuthentication no`, ใช้ key-based auth เท่านั้น
 - ทบทวน **password complexity policy**: minimum 14 characters, check against HaveIBeenPwned wordlist
 
-## Phase: post_incident
-### Sub: lessons_learned
-- วิเคราะห์ว่า **Lockout Policy** มีอยู่แล้วหรือไม่ และทำไมถึงไม่ block attacker ได้เร็วพอ
-- ตรวจสอบว่า **MFA** ถูก enforce สำหรับ account ที่ถูก target หรือไม่
-- ประเมิน **MTTD**: SIEM alert trigger เร็วพอที่จะป้องกัน successful login หรือไม่
-- วิเคราะห์ว่า **account ที่ถูก lockout** ส่งผลกระทบต่อ business operations มากน้อยแค่ไหน
-- ตรวจสอบว่ามี **password reuse** ข้าม system หลาย ระบบหรือไม่
+## Phase: recovery
+### Sub: service_restoration
+- **Unlock account** เฉพาะหลัง verify identity เจ้าของบัญชีผ่านช่องทาง out-of-band (โทรศัพท์/ต่อหน้า) ไม่ใช่ตาม request ทาง email/chat เพียงอย่างเดียว
+- **คืนสิทธิ์ทีละขั้น**: เปิด MFA ให้บัญชีที่ถูก target ก่อน แล้วค่อย unlock ไม่ปลด lockout ก่อนมี MFA
+- ทยอย **ผ่อนคลาย geo-block/CAPTCHA ชั่วคราว** ที่เปิดไว้ตอน containment กลับสู่ policy ปกติ เมื่อยืนยันว่าการโจมตีหยุดแล้วอย่างน้อย 24–48 ชั่วโมง
+- แจ้ง **Application Owner / Help Desk** ว่าบัญชีกลับมาใช้งานได้แล้ว พร้อมสรุปเงื่อนไขที่เปลี่ยน (เช่น ต้องใช้ MFA ทุกครั้ง)
 
-### Sub: improvements
-- **บังคับ MFA** ทุก account โดยเฉพาะ privileged account ภายใน 30 วัน
-- เพิ่ม **SIEM rule** ตรวจ password spray pattern (failed login หลาย username จาก IP เดียว)
-- Deploy **Identity Protection** (Azure AD Identity Protection หรือ equivalent)
-- ทำ **Privileged Access Workstation (PAW)** สำหรับ admin account
-- จัด training เรื่อง **Password Manager** และ unique password per service
+### Sub: validation_monitoring
+- ตรวจสอบว่าไม่มี **session ค้าง** หรือ token เก่าที่ยังใช้ได้หลัง reset password (`klist purge`, revoke refresh token บน cloud identity)
+- เฝ้าระวัง **Event ID 4625/4740 ซ้ำ** จาก IP หรือบัญชีเดิมต่ออีกอย่างน้อย 7 วัน ก่อนปิดเคส
+- ยืนยันว่า **MFA enrollment** ของบัญชีที่ถูก target สำเร็จจริง (ทดสอบ login จริงหนึ่งรอบ)
+- เทียบ **baseline การล็อกอิน** ของบัญชีก่อน/หลังเหตุการณ์ว่ากลับสู่ภาวะปกติ
+
+### Sub: closure
+- บันทึก **สรุปเหตุการณ์และเงื่อนไขการปิดเคส** ลง incident ticket (เวลาเริ่ม/จบ, บัญชี/IP ที่เกี่ยวข้อง, มาตรการที่คงไว้ถาวร)
+- ยืนยันกับ **Application Owner** ว่า business operations กลับมาปกติ ไม่มี ticket ค้างจากผู้ใช้ที่ถูกกระทบ
+- ส่งต่อรายการ **มาตรการระยะยาวที่ยังไม่เสร็จ** (เช่น MFA ทุก account, geo-blocking ถาวร) เป็น follow-up item ไม่ใช่ปิดเงียบ

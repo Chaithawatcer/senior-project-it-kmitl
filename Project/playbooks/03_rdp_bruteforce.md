@@ -5,50 +5,24 @@ severity: High
 source_doc: RDP_Brute_Force_IR_Playbook_v1
 ---
 
-## Phase: preparation
-### Sub: tool_readiness
-- เปิด **Windows Security Audit Policy** สำหรับ Event ID 4625 (logon failure), 4624 (logon success), 4778 (session reconnect)
-- ติดตั้ง **RDPGuard** หรือ **fail2ban สำหรับ Windows** สำหรับ auto-block IP หลัง failed login
-- เตรียม **NLA (Network Level Authentication)** เพื่อบังคับ authentication ก่อน establish RDP session
-- มี **GeoIP database** สำหรับ ระบุประเทศของ source IP ที่ brute force
-- เตรียม **Shodan/Censys lookup** สำหรับ ตรวจว่า RDP port ถูก expose บน internet หรือไม่
-- ติดตั้ง **Sysmon** สำหรับ log process ที่ spawn หลัง RDP login สำเร็จ
-- เตรียม list ของ **Tor exit node IP** และ **commercial VPN IP range** สำหรับ threat intel
+## เอกสารอ้างอิง — Preparation, Detection & Post-Incident Review (ไม่ถูก ingest เป็น RAG chunk)
 
-### Sub: team_roles
-- **Incident Commander**: ตัดสินใจ block RDP จาก internet ทันที vs ปล่อยไว้เพื่อ monitor
-- **Windows/AD Admin**: ตรวจสอบ account lockout, reset password, ตรวจสอบ RDP session ที่ active
-- **Network Engineer**: block source IP ที่ Firewall, ตรวจสอบว่า RDP expose โดยตรงจาก internet
-- **SOC Analyst (L2/L3)**: monitor Event 4625/4624 แบบ real-time, ระบุ pattern และ target account
-- **Forensic Analyst**: เก็บ evidence จาก RDP session ที่สำเร็จ — ตรวจว่า attacker ทำอะไรบ้าง
-- **Help Desk**: รับแจ้ง user ที่ถูก lockout และ verify identity ก่อน unlock
+> ขอบเขต proposal §3.3 กำหนดให้ playbook เชิงรับมีแค่ 3 phase: Containment / Eradication / Recovery
+> เนื้อหาด้านล่างเก็บไว้เป็นข้อมูลอ้างอิง ไม่ได้อยู่ใต้ `## Phase:` จึงไม่ถูก `01_ingest.py` ดึงเข้า ChromaDB
 
-### Sub: comm_plan
-- แจ้ง **Windows Admin** ทันทีเมื่อพบ Event 4625 > 50 ครั้งจาก IP เดียวใน 5 นาที
-- ส่ง **P1 Alert** ทันทีหากพบ Event 4624 Type 10 (RDP successful login) จาก IP ต่างประเทศ
-- แจ้ง **Network team** เพื่อ block IP และ evaluate ว่า RDP ควร expose ผ่าน internet โดยตรงหรือไม่
-- ประสาน **application owner** สำหรับ server ที่ถูก RDP brute force เพื่อ assess business impact
-- บันทึก **IP list, account target, timestamp** ใน incident ticket ทุก update
+**Tool readiness:** Windows Security Audit Policy สำหรับ Event 4625/4624/4778, RDPGuard หรือ fail2ban สำหรับ Windows, NLA (Network Level Authentication), GeoIP database, Shodan/Censys lookup ตรวจว่า RDP port expose บน internet ไหม, Sysmon สำหรับ process หลัง RDP login, list ของ Tor exit node/commercial VPN range
 
-## Phase: detection
-### Sub: log_sources
-- **Windows Security Event ID 4625**: Failed logon — บันทึก Logon Type, source IP, target account, failure reason
-- **Windows Security Event ID 4624 Type 10**: Successful RemoteInteractive logon — RDP login สำเร็จ
-- **Windows Security Event ID 4778**: Remote session reconnected — RDP session กลับมา reconnect
-- **Windows Security Event ID 4740**: Account lockout เนื่องจาก repeated failure
-- **TerminalServices-RemoteConnectionManager Log**: Event ID 1149 — Remote Desktop Services: User authentication succeeded/failed
-- **TerminalServices-LocalSessionManager Log**: Event ID 21 (session logon), 23 (logoff), 24 (disconnect)
-- **Sysmon Event ID 1**: process ที่ spawn ใน session ที่ login ผ่าน RDP (Type 10)
-- **Firewall Log**: inbound connection บน port 3389 จาก IP ที่ผิดปกติ
+**Team roles:** Incident Commander (ตัดสินใจ block RDP จาก internet ทันทีหรือ monitor ต่อ), Windows/AD Admin (lockout/reset/ตรวจ active session), Network Engineer (block source IP, ตรวจว่า RDP expose ตรง), SOC Analyst L2/L3 (monitor 4625/4624 real-time), Forensic Analyst (เก็บ evidence จาก session ที่สำเร็จ), Help Desk (verify identity ก่อน unlock)
 
-### Sub: ioc_list
-- **Event ID 4625 Type 10**: > 20 ครั้งใน 5 นาทีจาก IP เดียว ไปยัง account เดียว หรือหลาย account
-- **Sequential account pattern**: Administrator, admin, Guest, user, user1, backup (common RDP target)
-- **Event ID 4624 Type 10 จาก new IP**: login สำเร็จจาก IP ที่ไม่เคย login มาก่อน
-- **Non-business hour RDP**: successful RDP login ช่วงกลางคืนหรือวันหยุดจาก IP ต่างประเทศ
-- **Event ID 4740**: account lockout หลายครั้งในช่วงเวลาสั้น
-- **Event 1149 failure burst**: authentication failure burst ใน TerminalServices log
-- **Source IP**: Tor exit node, known scanning IP (Shodan-indexed scanner), commercial VPN, ต่างประเทศที่ไม่มี business
+**Comm plan:** แจ้ง Windows Admin ทันทีเมื่อ Event 4625 > 50 ครั้ง/5 นาทีจาก IP เดียว, ส่ง P1 Alert ทันทีถ้าพบ Event 4624 Type 10 จาก IP ต่างประเทศ, แจ้ง Network team ประเมินว่า RDP ควร expose ตรงหรือไม่, ประสาน application owner assess business impact
+
+**Log sources:** Windows Security Event 4625 (failed logon), 4624 Type 10 (successful RemoteInteractive), 4778 (session reconnect), 4740 (account lockout), TerminalServices-RemoteConnectionManager Event 1149, TerminalServices-LocalSessionManager Event 21/23/24, Sysmon Event ID 1 (process หลัง RDP login), Firewall log (inbound port 3389)
+
+**IoC list:** Event 4625 Type 10 > 20 ครั้ง/5 นาทีต่อ IP, sequential account pattern (Administrator, admin, Guest, user1, backup), Event 4624 Type 10 จาก IP ใหม่ที่ไม่เคย login, non-business hour RDP จากต่างประเทศ, Event 4740 ซ้ำในเวลาสั้น, Event 1149 failure burst, source IP เป็น Tor/scanner/VPN/ต่างประเทศไม่มี business
+
+**Lessons learned:** RDP expose ตรงจาก internet เพราะอะไรและใครอนุมัติ, Account Lockout Policy ทำงานและ threshold เหมาะสมหรือไม่, มีการใช้ MFA สำหรับ RDP หรือไม่, SIEM alert trigger ทันทีหรือล่าช้า, ผลกระทบ downstream ของ successful login
+
+**Improvements ที่ควรผลักดันต่อ:** ปิด RDP จาก internet ทันทีบังคับ VPN+MFA ทุกกรณี, deploy RDP Gateway พร้อม MFA, เพิ่ม SIEM alert สำหรับ RDP brute force + login จากประเทศใหม่, ทำ external port scan สม่ำเสมอ, จัด security awareness training
 
 ## Phase: containment
 ### Sub: short_term
@@ -96,17 +70,20 @@ source_doc: RDP_Brute_Force_IR_Playbook_v1
 - บังคับ **NLA** บน RDP host ทุกเครื่อง: `Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1`
 - ทบทวน **Firewall rule** ให้ RDP เข้าถึงได้เฉพาะ authorized IP range เท่านั้น
 
-## Phase: post_incident
-### Sub: lessons_learned
-- ตรวจสอบว่า **RDP exposed โดยตรงจาก internet** เพราะอะไร และ approved โดยใคร
-- ประเมินว่า **Account Lockout Policy** ทำงานหรือไม่ และ threshold เหมาะสมหรือไม่
-- วิเคราะห์ว่า **MFA** มีการใช้งานสำหรับ RDP access หรือไม่
-- ตรวจสอบว่า **SIEM alert** trigger ทันที event 4625 burst หรือล่าช้า
-- ประเมินว่า successful login มีผลกระทบ downstream อะไรบ้าง
+## Phase: recovery
+### Sub: service_restoration
+- **เปิด RDP กลับมาผ่าน RDP Gateway/VPN เท่านั้น** ห้าม expose port 3389 ตรงสู่ internet เหมือนก่อนเกิดเหตุ
+- **Unlock/reset account** เฉพาะหลัง verify identity ผ่านช่องทาง out-of-band และยืนยันว่าเปิด NLA + MFA แล้ว
+- แจ้ง **Application Owner** ว่า server กลับมาใช้งานได้ พร้อมเงื่อนไขใหม่ (ต้องผ่าน gateway, ต้องมี MFA)
+- ทยอย **คืน Firewall rule** ให้ RDP เข้าถึงได้เฉพาะ IP range ที่ได้รับอนุญาต ไม่เปิดกว้างเหมือนเดิม
 
-### Sub: improvements
-- **ปิด RDP จาก internet** ทันที และบังคับใช้ VPN + MFA สำหรับ remote access ทุก case
-- Deploy **RDP Gateway** พร้อม MFA integration
-- เพิ่ม **SIEM alert** สำหรับ RDP brute force (Event 4625 Type 10 > threshold) และ RDP login จาก new country
-- ทำ **regular external port scan** เพื่อ identify exposed RDP port ก่อนที่ attacker จะพบ
-- จัด **security awareness training** เรื่อง remote access security policy
+### Sub: validation_monitoring
+- เฝ้าระวัง **Event 4625/4624 Type 10 ซ้ำ** จาก IP หรือ account เดิมอีกอย่างน้อย 7 วัน
+- ยืนยันว่า **NLA + MFA บังคับใช้จริง** ด้วยการทดสอบ login จริงหนึ่งรอบผ่าน gateway ใหม่
+- ตรวจสอบว่าไม่มี **RDP session ค้าง** หรือ scheduled task ที่ attacker สร้างไว้หลงเหลือ
+- ทำ **external port scan ซ้ำ** ยืนยันว่า 3389 ไม่ expose ตรงสู่ internet อีกแล้ว
+
+### Sub: closure
+- บันทึก **สรุปเหตุการณ์และมาตรการที่คงไว้ถาวร** (RDP Gateway, MFA, Firewall rule ใหม่) ลง incident ticket
+- ยืนยันกับ **Network Engineer** ว่า config การ block/gateway ผ่านการตรวจทานแล้วไม่ใช่แค่ตั้งชั่วคราว
+- ส่งต่อ **RDP Gateway/MFA rollout ที่ยังไม่ครบทุกเครื่อง** เป็น follow-up item พร้อมกำหนดเวลา

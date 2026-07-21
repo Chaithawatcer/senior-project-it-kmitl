@@ -14,7 +14,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return [{\n  json: {\n    \"timestamp\": \"2026-07-20T08:23:15.187+0000\",\n    \"rule\": {\n      \"level\": 10,\n      \"description\": \"sshd: brute force trying to get access to the system.\",\n      \"id\": \"5763\",\n      \"mitre\": {\n        \"id\": [\"T1110\"],\n        \"tactic\": [\"Credential Access\"],\n        \"technique\": [\"Brute Force\"]\n      },\n      \"frequency\": 8,\n      \"firedtimes\": 3,\n      \"mail\": true,\n      \"groups\": [\"syslog\", \"sshd\", \"authentication_failures\"],\n      \"pci_dss\": [\"11.4\", \"10.2.4\", \"10.2.5\"],\n      \"gdpr\": [\"IV_35.7.d\", \"IV_32.2\"],\n      \"hipaa\": [\"164.312.b\"],\n      \"nist_800_53\": [\"SI.4\", \"AU.14\", \"AC.7\"],\n      \"tsc\": [\"CC6.1\", \"CC6.8\", \"CC7.2\", \"CC7.3\"]\n    },\n    \"agent\": { \"id\": \"003\", \"name\": \"web-server-01\", \"ip\": \"10.0.1.15\" },\n    \"manager\": { \"name\": \"wazuh-manager\" },\n    \"cluster\": { \"name\": \"wazuh\", \"node\": \"master\" },\n    \"id\": \"1721463795.4823910\",\n    \"decoder\": { \"parent\": \"sshd\", \"name\": \"sshd\" },\n    \"data\": { \"srcip\": \"45.148.10.72\", \"srcport\": \"51824\", \"srcuser\": \"admin\" },\n    \"predecoder\": {\n      \"program_name\": \"sshd\",\n      \"timestamp\": \"Jul 20 08:23:15\",\n      \"hostname\": \"web-server-01\"\n    },\n    \"full_log\": \"Jul 20 08:23:15 web-server-01 sshd[24193]: Failed password for admin from 45.148.10.72 port 51824 ssh2\",\n    \"location\": \"/var/log/auth.log\"\n  }\n}];"
+        "jsCode": "return [{\n  json: {\n    \"timestamp\": \"2026-08-20T03:45:12.187+0000\",\n    \"rule\": {\n      \"level\": 10,\n      \"description\": \"Multiple Windows Logon Failures followed by Account Lockout (Active Directory).\",\n      \"id\": \"60122\",\n      \"mitre\": {\n        \"id\": [\"T1110.001\"],\n        \"tactic\": [\"Credential Access\"],\n        \"technique\": [\"Brute Force: Password Guessing\"]\n      },\n      \"frequency\": 45,\n      \"firedtimes\": 45,\n      \"mail\": true,\n      \"groups\": [\"windows\", \"windows_security\", \"authentication_failed\"],\n      \"pci_dss\": [\"10.2.4\", \"10.2.5\", \"11.4\"],\n      \"gdpr\": [\"IV_35.7.d\", \"IV_32.2\"],\n      \"hipaa\": [\"164.312.b\"],\n      \"nist_800_53\": [\"AU.14\", \"AC.7\", \"SI.4\"],\n      \"tsc\": [\"CC6.1\", \"CC6.8\", \"CC7.2\", \"CC7.3\"]\n    },\n    \"agent\": { \"id\": \"010\", \"name\": \"DC01\", \"ip\": \"10.0.0.10\" },\n    \"manager\": { \"name\": \"wazuh-manager\" },\n    \"cluster\": { \"name\": \"wazuh\", \"node\": \"master\" },\n    \"id\": \"1755663912.9182734\",\n    \"decoder\": { \"name\": \"windows_eventchannel\" },\n    \"data\": {\n      \"win\": {\n        \"system\": {\n          \"eventID\": \"4625\",\n          \"channel\": \"Security\",\n          \"severityValue\": \"AUDIT_FAILURE\",\n          \"systemTime\": \"2026-08-20T03:45:12.000000Z\"\n        },\n        \"eventdata\": {\n          \"targetUserName\": \"admin_somchai\",\n          \"targetDomainName\": \"CORP\",\n          \"ipAddress\": \"185.15.58.22\",\n          \"ipPort\": \"51824\",\n          \"logonType\": \"3\",\n          \"status\": \"0xC000006A\",\n          \"subStatus\": \"0xC000006A\",\n          \"workstationName\": \"UNKNOWN-PC\"\n        }\n      },\n      \"additional_context\": {\n        \"windows_event_ids\": [4625, 4740],\n        \"distinct_accounts\": 1,\n        \"failed_attempts\": 45,\n        \"time_window_minutes\": 10\n      }\n    },\n    \"full_log\": \"Multiple Windows Logon Type 3 failures (Event ID 4625, sub status 0xC000006A) for admin_somchai from 185.15.58.22, followed by account lockout (Event ID 4740).\",\n    \"location\": \"WinEvtLog\"\n  }\n}];"
       },
       "id": "e1b665b8-ed2b-43c3-813f-0ba40ef4ce61",
       "name": "Mock Wazuh Alert",
@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Normalize: Wazuh schema -> Omnissiah job payload\n// ตอนขึ้นจริง FastAPI จะเป็นคนทำขั้นนี้แล้วส่งมาทาง webhook\nconst a = $json;\nconst ev = a.data?.win?.eventdata ?? {};\n\nconst techniqueIds = a.rule?.mitre?.id ?? [];\nconst threatName = a.rule?.mitre?.technique?.[0] ?? a.rule?.description ?? \"Unknown Threat\";\n\nconst severityMap = (level) => {\n  if (level >= 12) return \"critical\";\n  if (level >= 9) return \"high\";\n  if (level >= 6) return \"medium\";\n  return \"low\";\n};\n\nreturn [{\n  json: {\n    job_id: `job_${Date.now().toString(36)}`,\n    playbook_id: null,\n    threat_name: threatName,\n    technique_ids: techniqueIds,\n    severity: severityMap(a.rule?.level ?? 0),\n    mode: \"standard\",\n    alert: {\n      source: \"wazuh\",\n      rule_id: a.rule?.id,\n      rule_description: a.rule?.description,\n      timestamp: a.timestamp,\n      host: a.agent?.name,\n      log_source: a.location,\n      source_port: a.data?.srcport,\n      event_id: a.data?.win?.system?.eventID,\n      target_user: ev.targetUserName ?? a.data?.srcuser,\n      source_ip: ev.ipAddress ?? a.data?.srcip,\n      logon_type: ev.logonType,\n      status_code: ev.status,\n      sub_status: ev.subStatus\n    }\n  }\n}];"
+        "jsCode": "// Normalize: Wazuh schema -> Omnissiah job payload\n// ตอนขึ้นจริง FastAPI จะเป็นคนทำขั้นนี้แล้วส่งมาทาง webhook\nconst a = $json;\nconst ev = a.data?.win?.eventdata ?? {};\nconst ctx = a.data?.additional_context ?? {};\n\nconst techniqueIds = a.rule?.mitre?.id ?? [];\nconst threatName = a.rule?.mitre?.technique?.[0] ?? a.rule?.description ?? \"Unknown Threat\";\n\nconst severityMap = (level) => {\n  if (level >= 12) return \"critical\";\n  if (level >= 9) return \"high\";\n  if (level >= 6) return \"medium\";\n  return \"low\";\n};\n\n// Stand-in สำหรับ AD group membership lookup จริง (ยังไม่ได้ต่อ AD)\n// ตอนขึ้นจริงควรถาม AD ว่าบัญชีนี้อยู่กลุ่ม Domain Admins/Privileged หรือไม่ ไม่ใช่ hardcode ตาราง\nconst ACCOUNT_PRIVILEGE_LOOKUP = {\n  \"admin_somchai\": \"domain_admin\"\n};\nconst accountPrivilege = ACCOUNT_PRIVILEGE_LOOKUP[ev.targetUserName] ?? \"standard\";\n\nreturn [{\n  json: {\n    job_id: `job_${Date.now().toString(36)}`,\n    playbook_id: null,\n    threat_name: threatName,\n    technique_ids: techniqueIds,\n    severity: severityMap(a.rule?.level ?? 0),\n    mode: \"standard\",\n    account_privilege: accountPrivilege,\n    distinct_accounts: ctx.distinct_accounts ?? 1,\n    attack_success: false,\n    cti_verdict: \"unknown\",\n    alert: {\n      source: \"wazuh\",\n      rule_id: a.rule?.id,\n      rule_description: a.rule?.description,\n      timestamp: a.timestamp,\n      host: a.agent?.name,\n      log_source: a.location,\n      source_port: a.data?.srcport,\n      event_id: a.data?.win?.system?.eventID,\n      target_user: ev.targetUserName ?? a.data?.srcuser,\n      target_domain: ev.targetDomainName,\n      source_ip: ev.ipAddress ?? a.data?.srcip,\n      logon_type: ev.logonType,\n      status_code: ev.status,\n      sub_status: ev.subStatus,\n      failed_attempts: ctx.failed_attempts,\n      time_window_minutes: ctx.time_window_minutes\n    }\n  }\n}];"
       },
       "id": "64ba3244-3490-4cda-9f39-4c84de5e7fa9",
       "name": "Normalize Alert",
@@ -182,7 +182,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ยุบ 5 items กลับเป็น 1 ก้อน\nconst job = $('Normalize Alert').first().json;\nconst sections = $input.all().map(i => i.json);\n\n// รวม missing_techniques จากทุก phase\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\nconst fallbackUsed = allRag.some(r => r.fallback_used === true);\n\nreturn [{\n  json: {\n    job_id: job.job_id,\n    threat_name: job.threat_name,\n    technique_ids: job.technique_ids,\n    severity: job.severity,\n    alert: job.alert,\n    sections,\n    missing_techniques: missing,\n    fallback_used: fallbackUsed\n  }\n}];"
+        "jsCode": "// ยุบ 3 items กลับเป็น 1 ก้อน\nconst job = $('Normalize Alert').first().json;\nconst ncsc = $('Assess Severity').first().json;\nconst sections = $input.all().map(i => i.json);\n\n// รวม missing_techniques จากทุก phase\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\nconst fallbackUsed = allRag.some(r => r.fallback_used === true);\n\nreturn [{\n  json: {\n    job_id: job.job_id,\n    threat_name: job.threat_name,\n    technique_ids: job.technique_ids,\n    severity: job.severity,\n    alert: job.alert,\n    sections,\n    missing_techniques: missing,\n    fallback_used: fallbackUsed,\n    ncsc: {\n      ncsc_category: ncsc.ncsc_category,\n      category_name: ncsc.category_name,\n      rationale: ncsc.rationale,\n      escalation_owner: ncsc.escalation_owner,\n      escalation_tier: ncsc.escalation_tier,\n      sla_minutes: ncsc.sla_minutes\n    }\n  }\n}];"
       },
       "id": "d92bd53f-1405-43fd-b934-54d8aad71bb5",
       "name": "Aggregate Sections",
@@ -238,7 +238,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ job_id: $('Aggregate Sections').first().json.job_id, threat_name: $('Aggregate Sections').first().json.threat_name, technique_ids: $('Aggregate Sections').first().json.technique_ids, severity: $('Aggregate Sections').first().json.severity, status: 'draft', markdown: $json.markdown, missing_techniques: $('Aggregate Sections').first().json.missing_techniques }) }}",
+        "jsonBody": "={{ JSON.stringify({ job_id: $('Aggregate Sections').first().json.job_id, threat_name: $('Aggregate Sections').first().json.threat_name, technique_ids: $('Aggregate Sections').first().json.technique_ids, severity: $('Aggregate Sections').first().json.severity, status: 'draft', markdown: $json.markdown, missing_techniques: $('Aggregate Sections').first().json.missing_techniques, ncsc_category: $('Aggregate Sections').first().json.ncsc.ncsc_category, escalation_tier: $('Aggregate Sections').first().json.ncsc.escalation_tier }) }}",
         "options": {}
       },
       "id": "ab32e0c1-c036-4f20-b811-72745bbd6466",
@@ -248,6 +248,36 @@
       "position": [
         4864,
         -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/assess/severity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ account_privilege: $json.account_privilege, attack_success: $json.attack_success, distinct_accounts: $json.distinct_accounts, cti_verdict: $json.cti_verdict }) }}",
+        "options": {}
+      },
+      "id": "b7e5a2c1-4f3d-4a9e-8b1c-9d6e2f4a8c7b",
+      "name": "Assess Severity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2672,
+        -80
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -282,7 +312,7 @@
       "main": [
         [
           {
-            "node": "Get Sections",
+            "node": "Assess Severity",
             "type": "main",
             "index": 0
           }
@@ -382,6 +412,17 @@
         [
           {
             "node": "Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Severity": {
+      "main": [
+        [
+          {
+            "node": "Get Sections",
             "type": "main",
             "index": 0
           }

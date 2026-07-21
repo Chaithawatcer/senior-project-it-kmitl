@@ -1,9 +1,26 @@
 # HANDOFF — Omnissiah (AI-Driven SOC Copilot)
 
 เอกสารส่งต่องาน สำหรับ **เพื่อนในทีมที่มาทำต่อ** และ **AI assistant ที่รับ context ใหม่**
-อัปเดตล่าสุด: 2026-07-21
+อัปเดตล่าสุด: 2026-07-21 (รอบแก้ไขให้ตรงกับ proposal + ARCHITECTURE.md)
 
 > ถ้าคุณเป็น AI assistant: อ่านไฟล์นี้ให้จบก่อนแก้โค้ด ส่วน §4 (ข้อตกลงที่ห้ามพัง) คือสิ่งที่แก้ผิดแล้วระบบพังเงียบ ๆ โดยไม่ error
+
+---
+
+## 0. รอบแก้ไขนี้ทำอะไรไปบ้าง (เทียบกับ commit ก่อนหน้าบนบรานช์นี้)
+
+โค้ดฉบับก่อนหน้ามีหลายจุดที่เบี่ยงไปจากทั้ง proposal ที่เสนออาจารย์และ ARCHITECTURE.md เอง — พบระหว่างรีวิวเทียบ 3 เอกสาร (proposal / ARCHITECTURE.md / โค้ดจริง) แล้วแก้ดังนี้:
+
+| ประเด็น | เดิม | แก้เป็น |
+|---|---|---|
+| จำนวน phase ของ playbook | 5 phase ตาม NIST (preparation, detection, containment, eradication, post_incident) | **3 phase ตาม proposal §3.3 และ ARCHITECTURE.md §2**: containment, eradication, recovery — เนื้อหา preparation/detection เดิมย้ายไปเป็น "เอกสารอ้างอิง" ที่หัวไฟล์ playbook แทน (ไม่ถูก ingest แต่ไม่ทิ้ง) |
+| Mock alert | SSH brute force บน Linux (`web-server-01`, `/var/log/auth.log`) — ผิด scope proposal §3.1 ที่จำกัดแค่ AD/Windows Event Log | Windows AD Event 4625+4740 (`DC01`, `admin_somchai`, `185.15.58.22`) ตรง schema ที่ `Normalize Alert` เขียนไว้อ่านอยู่แล้ว (`data.win.eventdata.*`) — เดิม mock กับ normalize logic ไม่ตรงกันเอง |
+| NCSC Categorisation + Escalation Matrix | ไม่มีเลย — severity เป็นแค่ Wazuh `rule.level` map ตรง ๆ | endpoint ใหม่ `POST /assess/severity` — deterministic rubric (ดู §4.6) คืน category C2–C6 + escalation tier/owner/SLA ต่อจาก `study/03`, `study/04` |
+| KB (Knowledge Base) | มีแค่ `doc_type=playbook` (3 ไฟล์) — proposal §3.2 ต้องการ 3 ส่วน | เพิ่ม `doc_type` metadata + `doc_type=defense` (1 ไฟล์ตัวอย่าง) + `doc_type=mitre` (7 ไฟล์ ดึงจริงผ่าน `mitreattack-python`) → **11 ไฟล์ 147 chunks** |
+| `mitreattack-python` | ไม่อยู่ใน `requirements.txt` เลย ทั้งที่ proposal ระบุชัด | เพิ่มแล้ว + สคริปต์ `gen_mitre_kb.py` รันได้จริง (ทดสอบแล้ว) |
+| `pymisp`, `python-frontmatter` | อยู่ใน requirements แต่ไม่เคยถูก import | เอาออก (ตอบคำถามที่ค้างใน §7 ฉบับก่อน) |
+
+ทุกจุดทดสอบ end-to-end แล้วด้วยการจำลอง flow ทั้งเส้นผ่าน HTTP ตรง (ไม่ผ่าน n8n เพราะไม่มี Gemini key ในเครื่องทดสอบ) — ดูผลใน §4.6 และ §4.7
 
 ---
 
@@ -11,12 +28,13 @@
 
 | ลำดับ | ไฟล์ | ได้อะไร |
 |---|---|---|
-| 1 | `ARCHITECTURE.md` | สถาปัตยกรรมเป้าหมาย 6 layers, 2 pipelines — **นี่คือปลายทาง ไม่ใช่ของที่มีอยู่จริง** |
+| 1 | `ARCHITECTURE.md` | สถาปัตยกรรมเป้าหมาย 6 layers, 2 pipelines — **นี่คือปลายทาง ไม่ใช่ของที่มีอยู่จริงทั้งหมด** |
 | 2 | `HANDOFF.md` (ไฟล์นี้) | ของที่มีอยู่จริงตอนนี้ + เหตุผลเบื้องหลัง |
 | 3 | `USAGE.md` | วิธีติดตั้งและรัน |
-| 4 | `Project/api.py` | logic หลักทั้งหมดอยู่ที่นี่ ไฟล์เดียว 239 บรรทัด |
-| 5 | `Project/01_ingest.py` | วิธี chunk เอกสารเข้า ChromaDB |
-| 6 | `n8n-workflow.json` | orchestration 13 nodes |
+| 4 | `Project/api.py` | logic หลักทั้งหมดอยู่ที่นี่ |
+| 5 | `Project/01_ingest.py` | วิธี chunk เอกสารเข้า ChromaDB (รองรับ `doc_type` + subfolder แล้ว) |
+| 6 | `Project/gen_mitre_kb.py` | ดึง MITRE Mitigations ทางการเข้า KB (ใหม่) |
+| 7 | `n8n-workflow.json` | orchestration 14 nodes (เพิ่ม `Assess Severity`) |
 
 ---
 
@@ -24,29 +42,40 @@
 
 | Layer ตาม §1 | สถานะ | หมายเหตุ |
 |---|---|---|
-| [1] Ingestion (Pipeline 1) | 🟡 mock | node `Mock Wazuh Alert` hardcode alert ไว้ ยังไม่มี webhook รับของจริง |
-| [2] Normalization | 🟢 ทำแล้ว | node `Normalize Alert` — Wazuh schema → job payload |
-| [3] Enrichment & Analysis | 🔴 ยังไม่ทำ | **ไม่มี** VirusTotal / AbuseIPDB / NCSC severity / Escalation Matrix |
-| [4] RAG Core | 🟢 ทำแล้ว | ChromaDB + hybrid retrieval + วนทีละ phase ครบ |
-| [5] Output & Notification | 🟡 ครึ่งเดียว | ประกอบ markdown ได้ แต่ไม่มี Teams / LINE |
+| [1] Ingestion (Pipeline 1) | 🟡 mock (แก้ scope แล้ว) | `Mock Wazuh Alert` ตอนนี้เป็น Windows AD Event 4625/4740 ตรง scope proposal แล้ว — ยังไม่มี webhook รับของจริง |
+| [2] Normalization | 🟢 ทำแล้ว | เพิ่ม derive `account_privilege`/`distinct_accounts`/`attack_success`/`cti_verdict` สำหรับป้อน `/assess/severity` |
+| [3] Enrichment & Analysis | 🟡 ครึ่งเดียว | **NCSC + Escalation Matrix ทำแล้ว** (deterministic, ดู §4.6) — **CTI enrichment (VirusTotal/AbuseIPDB) ยังไม่ทำ** `cti_verdict` เป็น `"unknown"` เสมอตอนนี้ |
+| [4] RAG Core | 🟢 ทำแล้ว + ขยาย | ChromaDB + hybrid retrieval + วนทีละ phase ครบ + รองรับ filter `doc_type` แล้ว (ยังไม่ได้ทำ tiering primary/secondary เต็มรูปแบบ) |
+| [5] Output & Notification | 🟡 ครึ่งเดียว | ประกอบ markdown ได้ (มี NCSC/Escalation table แล้ว) แต่ไม่มี Teams/LINE |
 | [6] Human Review Gate | 🔴 ยังไม่ทำ | มีแค่ field `status: "draft"` ไม่มีกลไกอนุมัติ |
-| Pipeline 2 (เชิงรุก) | 🔴 ยังไม่เริ่ม | ไม่มีโค้ดเลยสักบรรทัด |
+| Pipeline 2 (เชิงรุก) | 🔴 ยังไม่เริ่ม | ไม่มีโค้ดเลยสักบรรทัด — งานใหญ่สุดที่เหลือ |
 
-**สรุป: ตอนนี้พิสูจน์ได้แค่แกน RAG ว่า retrieval + generation ทีละ phase ใช้งานได้จริง** ซึ่งเป็นส่วนที่เสี่ยงที่สุดของโปรเจกต์ — เลือกทำก่อนโดยตั้งใจ
+**สรุป:** RAG core + NCSC/Escalation decision (ส่วนตรรกะที่เสี่ยง hallucination สูงสุด) พิสูจน์แล้วว่าใช้งานได้จริงและตรง scope proposal สิ่งที่เหลือใหญ่ที่สุด 2 อย่างคือ **CTI enrichment** (ปลดล็อก cti_verdict ที่แท้จริง) และ **Pipeline 2 ทั้งเส้น**
 
 ---
 
 ## 3. Knowledge Base ที่มีอยู่
 
-3 playbooks · 41 chunks · ครบ 5 phase ทุกไฟล์
+**11 ไฟล์ · 147 chunks · ครบ 3 phase ทุกไฟล์ (containment/eradication/recovery)** — ครบ 3 ส่วนตาม proposal §3.2 แล้ว
 
-| ไฟล์ | threat_name | technique_ids | severity |
+| doc_type | ไฟล์ | threat_name / technique | ที่มา |
 |---|---|---|---|
-| `01_brute_force.md` | Brute Force | T1110.001, T1110.003, T1078 | Medium |
-| `02_credential_dumping.md` | Credential Dumping | T1003.001, T1078, T1550.002 | Critical |
-| `03_rdp_bruteforce.md` | RDP Brute Force | T1110.001, T1021.001, T1078 | High |
+| `playbook` | `01_brute_force.md` | Brute Force — T1110.001, T1110.003, T1078 | ทีมเขียนเอง |
+| `playbook` | `02_credential_dumping.md` | Credential Dumping — T1003.001, T1078, T1550.002 | ทีมเขียนเอง |
+| `playbook` | `03_rdp_bruteforce.md` | RDP Brute Force — T1110.001, T1021.001, T1078 | ทีมเขียนเอง |
+| `defense` | `defense/T1110_brute_force_defense.md` | เทคนิค T1110/.001/.003 ล้วน ไม่ผูก threat scenario | ทีมเขียนเอง (ตัวอย่าง — ควรเพิ่มอีกตาม technique ที่ KB ขยาย) |
+| `mitre` | `mitre/t1110_mitigations.md` และอีก 6 ไฟล์ (T1110.001, T1110.003, T1078, T1003.001, T1550.002, T1021.001) | Mitigations ทางการต่อ technique | `gen_mitre_kb.py` ผ่าน `mitreattack-python` (offline, ดาวน์โหลด STIX ครั้งเดียว) |
 
 ครอบคลุมแค่ธีม **credential attack บน Active Directory** — นอกขอบเขตนี้ระบบจะคืน `chunks: []` แล้วแปะธง ⚠️ ซึ่งเป็นพฤติกรรมที่ถูกต้อง ไม่ใช่บั๊ก
+
+**หมายเหตุ mitre docs:** เนื้อหาเดียวกันถูก duplicate ลงทั้ง 3 phase โดยตั้งใจ (MITRE Mitigations ไม่ได้ผูก phase ใด phase หนึ่งโดยธรรมชาติ ต่าง จาก threat playbook) เหตุผลเต็มอยู่ในคอมเมนต์ท้าย `gen_mitre_kb.py` — ควรทบทวนอีกทีตอนทำ tiering เต็มรูปแบบ (§6 ข้อ 3)
+
+**ต้องดาวน์โหลด STIX data เองก่อนรัน `gen_mitre_kb.py`** (ไม่ commit ไฟล์ ~50MB เข้า git):
+```bash
+mkdir -p Project/mitre_data
+curl -L -o Project/mitre_data/enterprise-attack.json \
+  https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+```
 
 ---
 
@@ -56,26 +85,27 @@
 
 ### 4.1 embedding model ต้องเป็นตัวเดียวกันทั้ง ingest และ query
 
-`01_ingest.py:25` และ `api.py:25` ใช้ `embedding_functions.DefaultEmbeddingFunction()` (= `all-MiniLM-L6-v2`) เหมือนกัน
+`01_ingest.py` และ `api.py` ใช้ `embedding_functions.DefaultEmbeddingFunction()` (= `all-MiniLM-L6-v2`) เหมือนกัน
 ถ้าเปลี่ยนที่ใดที่หนึ่ง vector space จะคนละชุด → retrieval คืน chunk ที่ไม่เกี่ยวเลยโดยไม่มี error
 **เปลี่ยนแล้วต้องรัน `01_ingest.py` ใหม่ทุกครั้ง**
 
-### 4.2 ชื่อ phase ต้องตรง 5 ค่านี้เป๊ะ
+### 4.2 ชื่อ phase ต้องตรง 3 ค่านี้เป๊ะ — **เปลี่ยนจาก 5 เป็น 3 แล้ว**
 
-`preparation` · `detection` · `containment` · `eradication` · `post_incident`
+`containment` · `eradication` · `recovery`
 
-ผูกกัน 3 ที่: หัวข้อ `## Phase:` ในไฟล์ playbook → metadata ใน ChromaDB → `SECTIONS[].phase` ใน `api.py:51`
+ผูกกัน 3 ที่: หัวข้อ `## Phase:` ในไฟล์ playbook → metadata ใน ChromaDB → `SECTIONS[].phase` ใน `api.py`
 สะกดไม่ตรงแม้ตัวเดียว → `where={"phase": {"$eq": ...}}` กรองไม่เจอ → chunks ว่าง
+
+> ⚠️ **ห้ามเพิ่มกลับเป็น 5 phase แบบ NIST lifecycle** โดยไม่คุยกับทีม/อาจารย์ก่อน — ขอบเขต proposal §3.3 ระบุไว้แค่ 3 phase (Containment/Eradication/Recovery) ตรงกับตัวอย่าง Quick Win ที่อาจารย์ให้มาด้วย
 
 ### 4.3 ไม่มี silent fallback — โดยตั้งใจ
 
-`api.py:115` เขียนไว้ชัด: ถ้าไม่ match technique เลย ให้คืน `chunks: []` แล้วปล่อยให้ธง ⚠️ ขึ้น
+`api.py`'s `/retrieve` เขียนไว้ชัด: ถ้าไม่ match technique เลย ให้คืน `chunks: []` แล้วปล่อยให้ธง ⚠️ ขึ้น
 **ห้ามเติม fallback ที่คืน chunk ใกล้เคียงมาแทน** — เหตุผลคือ playbook ที่ดูสมบูรณ์แต่ไม่มีข้อมูลจริงรองรับ อันตรายกว่า playbook ที่บอกตรง ๆ ว่าไม่รู้
 
-### 4.4 retrieval เป็น 2 ชั้นเสมอ
+### 4.4 retrieval เป็น 2 ชั้นเสมอ (+ filter `doc_type` เสริมได้)
 
-ชั้น 1 กรอง `phase` ที่ ChromaDB (`api.py:122`) → ชั้น 2 กรอง `technique_ids` ที่ Python (`api.py:131-134`)
-ที่ต้องทำชั้น 2 ฝั่ง Python เพราะ ChromaDB ใช้ `$contains` กับ array ไม่ได้ จึงเก็บ technique เป็น comma-string แล้วกรองเอง
+ชั้น 1 กรอง `phase` (+ `doc_type` ถ้าระบุ) ที่ ChromaDB → ชั้น 2 กรอง `technique_ids` ที่ Python (เพราะ ChromaDB ใช้ `$contains` กับ array ไม่ได้ จึงเก็บ technique เป็น comma-string แล้วกรองเอง)
 ดึงมา 30 แล้วค่อยตัดเหลือ `top_k` เพราะกรองซ้ำรอบสองจะเหลือน้อยกว่าที่ขอ
 
 ### 4.5 No Auto-Remediation
@@ -83,39 +113,62 @@
 ระบบไม่ส่งคำสั่งไปยังอุปกรณ์เครือข่ายทุกกรณี output เป็น Draft เสมอ
 นี่คือ **คุณสมบัติของสถาปัตยกรรม ไม่ใช่ข้อจำกัด** — เป็นเหตุผลที่ระบบปลอดภัยพอจะให้ LLM เขียนขั้นตอนได้
 
+### 4.6 NCSC + Escalation Matrix เป็น deterministic Python ไม่ใช่ LLM — ⭐ ใหม่
+
+`POST /assess/severity` ใน `api.py` ตัดสิน category (C2–C6) + escalation tier/owner/SLA ด้วย rubric ตายตัว (ดูโค้ด + คอมเมนต์เหตุผลในไฟล์ ตรงหัวข้อ "severity (NCSC + Escalation Matrix)")
+
+**ทำไมไม่ใช้ LLM ทั้งที่ ARCHITECTURE.md §2 ขั้นที่ 5 เขียนว่า "LLM node → Gemini API":** การตัดสิน category กระทบว่าใครถูกปลุกกลางดึกและ SLA เท่าไหร่ — เป็นจุดที่ผลกระทบของ hallucination สูงสุดในระบบ จึงเลือกให้เป็นโค้ดที่ unit test ได้แน่นอน แทนที่จะให้ LLM ตัดสินเอง ตรงกับหลักการที่ไฟล์นี้ (§4 ทั้งหมด) ยึดอยู่แล้ว **นี่คือจุดที่เบี่ยงจากถ้อยคำใน ARCHITECTURE.md — ควรคุยกับทีม/อาจารย์ว่ายอมรับไหม หรือจะปรับ ARCHITECTURE.md ให้ตรงกับของจริง**
+
+**ข้อมูลที่ยังขาด:** `cti_verdict` เป็น `"unknown"` เสมอตอนนี้ (CTI enrichment ยังไม่ทำ) — rubric ตีความ `"unknown"` แบบระมัดระวัง (เทียบเท่า suspicious ไม่ใช่ clean) กันประเมินต่ำเกินจริง เมื่อต่อ CTI จริงแล้วต้องแทนที่ค่านี้ (`Normalize Alert` node ใน n8n)
+
+**`account_privilege`** ตอนนี้มาจาก lookup table hardcode ใน `Normalize Alert` (`ACCOUNT_PRIVILEGE_LOOKUP`) — เป็น stand-in ชั่วคราวแทนการถาม AD group membership จริง ต้องแทนที่ก่อนขึ้นระบบจริง
+
+### 4.7 ทดสอบแล้ว (ไม่ใช่แค่เขียนแล้วเดา)
+
+รันจำลอง flow เต็มเส้นผ่าน HTTP ตรง (mock alert → normalize → `/assess/severity` → `/template/sections` → `/retrieve` ทั้ง 3 phase → `/playbooks/assemble` → `/playbooks` → `/playbooks/lookup`) ยืนยันว่า:
+- `/assess/severity` ให้ผลตรงตามเฉลย 3 scenario (Domain Admin+สำเร็จ→C2, Domain Admin+ไม่สำเร็จ+CTI unknown→C3, Standard+clean→C6)
+- `/retrieve` เจอ chunk ครบทั้ง 3 phase สำหรับ T1110.001 รวม `doc_type` ทั้ง playbook/defense/mitre และ filter `doc_types` ทำงานถูกต้อง
+- markdown ที่ประกอบออกมามี Alert Context + NCSC/Escalation table + 3 phase section ครบ
+- dedup lookup คืนค่า `ncsc_category`/`escalation_tier` ที่บันทึกไว้ถูกต้อง
+
+ยังไม่ได้ทดสอบผ่าน n8n จริง (ไม่มี Gemini key ในเครื่องที่แก้ไฟล์นี้) — **ต้องรัน `Execute Workflow` ใน n8n จริงอีกรอบก่อนเชื่อว่า wiring ถูก 100%**
+
 ---
 
 ## 5. จุดที่ยังเปราะ / รู้ตัวแล้วแต่ยังไม่แก้
 
 | จุด | รายละเอียด | ผลกระทบ |
 |---|---|---|
-| `_STORE` เป็น dict ใน RAM (`api.py:210`) | restart แล้วหายหมด | `/playbooks/lookup` ใช้ dedup ข้ามรอบไม่ได้จริง |
-| technique match ใช้ substring (`api.py:133`) | `"T1110" in "T1110.001,..."` → True | parent technique match child ได้โดยบังเอิญ **แต่ทางกลับกันไม่ได้** — mock alert ส่ง `T1110` แล้ว match ติดเพราะเหตุนี้ ถ้าเปลี่ยนเป็น exact match ต้องแก้ทั้ง KB |
-| `fallback_used` hardcode `False` (`api.py:150`) | field ตายอยู่ | `Aggregate Sections` อ่านค่านี้ไปแต่ได้ `false` ตลอด |
-| Coverage tier §4.4 ของ ARCHITECTURE ยังไม่มี | ไม่มี full/partial/none, ไม่มี similarity threshold | ตอนนี้มีแค่ `missing_techniques` แบบ binary |
-| ไม่มี dedup / `t0`–`t6` timestamp | ARCHITECTURE พูดถึงแต่โค้ดยังไม่มี | วัด MTTR ไม่ได้ |
+| `_STORE` เป็น dict ใน RAM | restart แล้วหายหมด | `/playbooks/lookup` ใช้ dedup ข้ามรอบไม่ได้จริง |
+| technique match ใช้ substring | `"T1110" in "T1110.001,..."` → True | parent technique match child ได้โดยบังเอิญ **แต่ทางกลับกันไม่ได้** — ถ้าเปลี่ยนเป็น exact match ต้องแก้ทั้ง KB |
+| `fallback_used` hardcode `False` | field ตายอยู่ | `Aggregate Sections` อ่านค่านี้ไปแต่ได้ `false` ตลอด |
+| Coverage tier (full/partial/none) ตาม ARCHITECTURE §4 ยังไม่มี | มี `doc_type` filter แล้วแต่ยังไม่ได้ใช้ตัดสิน tier, ไม่มี similarity threshold | ตอนนี้มีแค่ `missing_techniques` แบบ binary |
+| ไม่มี dedup กันยิงซ้ำพร้อมกัน / ไม่มี `t0`–`t6` timestamp | ARCHITECTURE พูดถึงแต่โค้ดยังไม่มี | วัด TTR ไม่ได้, race condition ตอนสองคนกด generate พร้อมกันได้ draft ซ้ำ |
 | API key เป็น plaintext ใน `n8n-workflow.json` | ค่าปัจจุบันเป็น placeholder | **ห้าม commit key จริงลงไฟล์นี้เด็ดขาด** |
-| `requirements.txt` ไม่ตรงกับ import จริง | `pymisp`, `python-frontmatter` ยังไม่ถูก import ที่ไหนเลย ส่วน `sentence-transformers` / `pydantic` ติดมาแบบ transitive ไม่ได้ประกาศตรง ๆ | ควรจัดให้ตรงก่อนส่ง |
+| MITRE mitigation chunk ซ้ำ 3 phase | ดู §3 หมายเหตุ | เก็บพื้นที่มากกว่าที่จำเป็น 3 เท่า — ยอมรับได้ตอนนี้ |
+| `cti_verdict` เป็น `"unknown"` เสมอ | CTI enrichment ยังไม่ทำ | NCSC category ที่ต้องพึ่ง CTI (เช่น C3 ในหลายเคส) ยังไม่แม่นเท่าที่ควร |
+| `account_privilege` มาจาก hardcode lookup table | ยังไม่ถาม AD จริง | ใช้ได้แค่กับ mock/demo ไม่ใช่ของจริง |
 
 ---
 
 ## 6. งานที่เหลือ — เรียงตามลำดับที่ควรทำ
 
-1. **แทน Mock ด้วย Webhook จริง** — เพิ่ม `POST /alerts` ใน `api.py` แล้วเปลี่ยน trigger ใน n8n เป็น Webhook node (งานเล็ก ปลดล็อกการทดสอบ end-to-end)
-2. **Persist `_STORE`** — SQLite ก็พอ ใช้ `chroma.sqlite3` แยกไฟล์หรือไฟล์ใหม่ก็ได้ (แก้ `api.py` §store อย่างเดียว)
-3. **Coverage tier** — implement §4.4 ของ ARCHITECTURE: ต้องเปิด `distances` ใน `include=[...]` ที่ `api.py:123` ก่อน แล้วหา threshold จากการทดลอง **อย่าตั้งค่าลอย ๆ**
-4. **CTI enrichment** — VirusTotal / AbuseIPDB คั่นระหว่าง `Normalize Alert` กับ `Get Sections`
-5. **NCSC severity + Escalation Matrix** — ตอนนี้ severity map จาก Wazuh level ตรง ๆ ยังไม่ใช่กรอบ NCSC
-6. **Notification + Review Gate** — Teams / LINE + กลไก Draft → Approved
-7. **Pipeline 2 (RSS)** — งานใหญ่สุด ทำท้ายสุด ใช้ RAG core ตัวเดิมได้เลย
+1. **CTI enrichment (VirusTotal/AbuseIPDB)** — คั่นระหว่าง `Normalize Alert` กับ `Assess Severity` แล้วแทนที่ `cti_verdict: "unknown"` ด้วยผลจริง (ดู `study/05-cti-enrichment-apis.md` มี endpoint/response format/เกณฑ์แปลงผลพร้อมใช้)
+2. **แทน Mock ด้วย Webhook จริง** — เพิ่ม `POST /alerts` ใน `api.py` แล้วเปลี่ยน trigger ใน n8n เป็น Webhook node
+3. **Coverage tier เต็มรูปแบบ** — ใช้ `doc_type` filter ที่เพิ่งเพิ่ม + เปิด `distances` ใน `include=[...]` แล้วหา threshold จากการทดลอง **อย่าตั้งค่าลอย ๆ**
+4. **Persist `_STORE`** — SQLite ก็พอ
+5. **Notification + Review Gate** — Teams/LINE (⚠️ LINE Notify ปิดบริการแล้ว มี.ค. 2025 — ใช้ Messaging API หรือ Teams แทน) + กลไก Draft → Approved
+6. **Pipeline 2 (RSS)** — งานใหญ่สุด ทำท้ายสุด ใช้ RAG core ตัวเดิมได้เลย
+7. **แทน `ACCOUNT_PRIVILEGE_LOOKUP` ด้วย AD group membership query จริง** — ตอนต่อ AD จริงแล้ว
 
 ---
 
 ## 7. เรื่องที่ยังไม่ได้ตัดสินใจ (ต้องคุยกันก่อนลงมือ)
 
+- **ARCHITECTURE.md §2 ขั้นที่ 5 เขียนว่า NCSC เป็น "LLM node" แต่ implementation จริงเป็น deterministic Python (§4.6)** — ยอมรับการเบี่ยงนี้ไหม หรือปรับถ้อยคำ ARCHITECTURE.md ให้ตรงกับของจริง
+- **MITRE mitigation chunk ที่ duplicate ลง 3 phase (§3)** — ทางออกชั่วคราว ควรทำ retrieval แบบ phase-agnostic สำหรับ `doc_type=mitre` จริงจังกว่านี้ไหม
 - **จะย้ายไป `google-genai` SDK ไหม** — `requirements.txt` ยังใช้ `google-generativeai` ซึ่ง Google deprecate แล้ว ตอนนี้ n8n เรียก REST ตรงจึงยังไม่กระทบ แต่ถ้าจะเขียน LLM logic ฝั่ง Python ต้องเลือก
-- **logic จะอยู่ที่ n8n หรือ FastAPI** — ตอนนี้ปนกัน (normalize + build prompt อยู่ n8n, retrieval + assemble อยู่ Python) คอมเมนต์ใน `Normalize Alert` เขียนว่า "ตอนขึ้นจริง FastAPI จะเป็นคนทำขั้นนี้" — ยังไม่ได้ย้าย
-- **`pymisp` จะใช้จริงไหม** — อยู่ใน requirements แต่ ARCHITECTURE ระบุ VirusTotal / AbuseIPDB ไม่ใช่ MISP
+- **logic จะอยู่ที่ n8n หรือ FastAPI ทั้งหมดไหม** — ตอนนี้ปนกัน (normalize/derive account_privilege อยู่ n8n, retrieval/assemble/severity assessment อยู่ Python) คอมเมนต์ใน `Normalize Alert` เขียนว่า "ตอนขึ้นจริง FastAPI จะเป็นคนทำขั้นนี้" — ยังไม่ได้ย้าย
 - **จะรองรับ MITRE technique ระดับ parent หรือ sub เท่านั้น** — เกี่ยวกับ §5 เรื่อง substring match
 
 ---
@@ -124,9 +177,9 @@
 
 | ค่า | ตั้งที่ไหน | ค่า placeholder ปัจจุบัน |
 |---|---|---|
-| `OMNISSIAH_API_KEY` | env บนเครื่อง + header `X-API-Key` ใน n8n 4 nodes | `REPLACE_WITH_SHARED_SECRET` |
+| `OMNISSIAH_API_KEY` | env บนเครื่อง + header `X-API-Key` ใน n8n 5 nodes (เพิ่ม `Assess Severity`) | `REPLACE_WITH_SHARED_SECRET` |
 | Gemini API key | header `x-goog-api-key` ใน node `Gemini Generate` | `Gemini-API` |
-| Base URL ของ API | 4 HTTP Request nodes ใน n8n | `http://host.docker.internal:8000` (สมมติว่า n8n อยู่ใน Docker) |
+| Base URL ของ API | 5 HTTP Request nodes ใน n8n | `http://host.docker.internal:8000` (สมมติว่า n8n อยู่ใน Docker) |
 
 รายละเอียดวิธีตั้งอยู่ใน `USAGE.md` §2–§4
 
@@ -144,3 +197,4 @@
 | Rate Guard | หน่วง `2` วินาที | กัน Gemini 429 |
 | chunk strategy | 1 `### Sub:` = 1 chunk | ไม่ได้ตัดตามจำนวน token |
 | distance metric | `cosine` (`hnsw:space`) | |
+| Escalation SLA (C2–C6) | 15 / 30 / 60 / 240 / 1440 นาที | ค่าตั้งต้นจาก `study/04` — ยังไม่ยืนยันกับอาจารย์ |
