@@ -1,0 +1,404 @@
+{
+  "name": "Omnissiah — Generate Playbook (Manual + Mock)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "ebf53aba-cc6e-45ee-90f3-04dcb7e9cf8c",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        2144,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    \"timestamp\": \"2026-07-20T08:23:15.187+0000\",\n    \"rule\": {\n      \"level\": 10,\n      \"description\": \"sshd: brute force trying to get access to the system.\",\n      \"id\": \"5763\",\n      \"mitre\": {\n        \"id\": [\"T1110\"],\n        \"tactic\": [\"Credential Access\"],\n        \"technique\": [\"Brute Force\"]\n      },\n      \"frequency\": 8,\n      \"firedtimes\": 3,\n      \"mail\": true,\n      \"groups\": [\"syslog\", \"sshd\", \"authentication_failures\"],\n      \"pci_dss\": [\"11.4\", \"10.2.4\", \"10.2.5\"],\n      \"gdpr\": [\"IV_35.7.d\", \"IV_32.2\"],\n      \"hipaa\": [\"164.312.b\"],\n      \"nist_800_53\": [\"SI.4\", \"AU.14\", \"AC.7\"],\n      \"tsc\": [\"CC6.1\", \"CC6.8\", \"CC7.2\", \"CC7.3\"]\n    },\n    \"agent\": { \"id\": \"003\", \"name\": \"web-server-01\", \"ip\": \"10.0.1.15\" },\n    \"manager\": { \"name\": \"wazuh-manager\" },\n    \"cluster\": { \"name\": \"wazuh\", \"node\": \"master\" },\n    \"id\": \"1721463795.4823910\",\n    \"decoder\": { \"parent\": \"sshd\", \"name\": \"sshd\" },\n    \"data\": { \"srcip\": \"45.148.10.72\", \"srcport\": \"51824\", \"srcuser\": \"admin\" },\n    \"predecoder\": {\n      \"program_name\": \"sshd\",\n      \"timestamp\": \"Jul 20 08:23:15\",\n      \"hostname\": \"web-server-01\"\n    },\n    \"full_log\": \"Jul 20 08:23:15 web-server-01 sshd[24193]: Failed password for admin from 45.148.10.72 port 51824 ssh2\",\n    \"location\": \"/var/log/auth.log\"\n  }\n}];"
+      },
+      "id": "e1b665b8-ed2b-43c3-813f-0ba40ef4ce61",
+      "name": "Mock Wazuh Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize: Wazuh schema -> Omnissiah job payload\n// ตอนขึ้นจริง FastAPI จะเป็นคนทำขั้นนี้แล้วส่งมาทาง webhook\nconst a = $json;\nconst ev = a.data?.win?.eventdata ?? {};\n\nconst techniqueIds = a.rule?.mitre?.id ?? [];\nconst threatName = a.rule?.mitre?.technique?.[0] ?? a.rule?.description ?? \"Unknown Threat\";\n\nconst severityMap = (level) => {\n  if (level >= 12) return \"critical\";\n  if (level >= 9) return \"high\";\n  if (level >= 6) return \"medium\";\n  return \"low\";\n};\n\nreturn [{\n  json: {\n    job_id: `job_${Date.now().toString(36)}`,\n    playbook_id: null,\n    threat_name: threatName,\n    technique_ids: techniqueIds,\n    severity: severityMap(a.rule?.level ?? 0),\n    mode: \"standard\",\n    alert: {\n      source: \"wazuh\",\n      rule_id: a.rule?.id,\n      rule_description: a.rule?.description,\n      timestamp: a.timestamp,\n      host: a.agent?.name,\n      log_source: a.location,\n      source_port: a.data?.srcport,\n      event_id: a.data?.win?.system?.eventID,\n      target_user: ev.targetUserName ?? a.data?.srcuser,\n      source_ip: ev.ipAddress ?? a.data?.srcip,\n      logon_type: ev.logonType,\n      status_code: ev.status,\n      sub_status: ev.subStatus\n    }\n  }\n}];"
+      },
+      "id": "64ba3244-3490-4cda-9f39-4c84de5e7fa9",
+      "name": "Normalize Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2672,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/template/sections",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "af00e975-9ee8-48a9-8055-23c5b5217900",
+      "name": "Get Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2896,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "sections",
+        "options": {}
+      },
+      "id": "d2b620b7-8213-46d5-87a9-3cccaaa1956d",
+      "name": "Split Out Sections",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        3104,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/retrieve",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phase: $json.phase, technique_ids: $('Normalize Alert').first().json.technique_ids, query: `${$('Normalize Alert').first().json.threat_name} ${$json.phase} incident response procedure ${$('Normalize Alert').first().json.technique_ids.join(' ')}`, top_k: 5 }) }}",
+        "options": {}
+      },
+      "id": "e4e8c27c-d5fa-4f48-97a8-66bff274d73a",
+      "name": "Retrieve Chunks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3328,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "ad6f6319-2189-48a3-8c6f-d654f5f6c631",
+      "name": "Rate Guard",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3552,
+        -272
+      ],
+      "webhookId": "b1000000-0000-4000-8000-000000000007"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ประกอบ prompt จาก 3 แหล่ง: fill_instruction + alert context + RAG chunks\nconst job = $('Normalize Alert').first().json;\nconst sec = $('Split Out Sections').item.json;\nconst rag = $json;\n\nconst chunks = (rag.chunks ?? []).map((c, i) => `[${i + 1}] (${c.source_doc})\\n${c.text}`).join('\\n---\\n');\nconst missing = rag.missing_techniques ?? [];\n\nconst a = job.alert;\nconst alertContext = [\n  `Threat: ${job.threat_name}`,\n  `Techniques: ${job.technique_ids.join(', ')}`,\n  `Host: ${a.host}`,\n  `Target user: ${a.target_user}`,\n  `Source IP: ${a.source_ip}`,\n  (a.event_id ? `Windows Event ID: ${a.event_id} (logon type ${a.logon_type})` : `Log source: ${a.log_source ?? '-'}`),\n  `Wazuh rule: ${a.rule_id} — ${a.rule_description}`\n].join('\\n');\n\nconst missingBlock = missing.length\n  ? `\\n⚠️ ไม่มีข้อมูลใน knowledge base รองรับ technique: ${missing.join(', ')}\\nให้แปะธง ⚠️ ในแถวที่เกี่ยวข้อง และห้ามแต่งขั้นตอนขึ้นเอง`\n  : '';\n\nconst prompt = `คุณเป็น SOC analyst ที่เขียน Incident Response Playbook\n\n${sec.fill_instruction}\n\n--- ALERT CONTEXT ---\n${alertContext}\n\n--- KNOWLEDGE BASE (ใช้เฉพาะข้อมูลด้านล่างนี้เท่านั้น ห้ามเพิ่มจากความรู้ตัวเอง) ---\n${chunks || '(ไม่พบข้อมูลรองรับ)'}\n${missingBlock}\n\nเขียนที่ระดับแนวทาง/วิธีการ (procedure) ไม่ต้องลงลึกคำสั่งเฉพาะ OS หรือ Event ID เจาะจง ถ้าหลาย OS มีแนวคิดเดียวกันให้ยุบรวมเป็นขั้นตอนเดียว (เช่น บล็อก source IP ที่ firewall แทนการแยก netsh/iptables) จะยกคำสั่งเป็นตัวอย่างสั้นๆ ได้ แต่ห้ามให้คำสั่งเป็นแกนหลักของขั้นตอน\\n\\nตอบเป็นตาราง Markdown เท่านั้น ไม่ต้องมีคำนำหรือคำสรุป`;\n\nreturn { json: { phase: sec.phase, heading: sec.heading, prompt } };"
+      },
+      "id": "2c1519d9-0a24-4995-9f92-183679ebb572",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3776,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "Gemini-API"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048 } }) }}",
+        "options": {}
+      },
+      "id": "68154b1b-f13e-41a9-a486-6c283128f50c",
+      "name": "Gemini Generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3984,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const text = $json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';\nconst meta = $('Build Prompt').item.json;\n\nreturn {\n  json: {\n    phase: meta.phase,\n    heading: meta.heading,\n    content: text.trim()\n  }\n};"
+      },
+      "id": "566a7e98-0af5-4612-8a0f-e96bab222fef",
+      "name": "Extract Section",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4208,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ยุบ 5 items กลับเป็น 1 ก้อน\nconst job = $('Normalize Alert').first().json;\nconst sections = $input.all().map(i => i.json);\n\n// รวม missing_techniques จากทุก phase\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\nconst fallbackUsed = allRag.some(r => r.fallback_used === true);\n\nreturn [{\n  json: {\n    job_id: job.job_id,\n    threat_name: job.threat_name,\n    technique_ids: job.technique_ids,\n    severity: job.severity,\n    alert: job.alert,\n    sections,\n    missing_techniques: missing,\n    fallback_used: fallbackUsed\n  }\n}];"
+      },
+      "id": "d92bd53f-1405-43fd-b934-54d8aad71bb5",
+      "name": "Aggregate Sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4432,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/playbooks/assemble",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "57d7420a-a34d-409e-9fbf-b5bdf8a8c1ae",
+      "name": "Assemble Playbook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4656,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/playbooks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ job_id: $('Aggregate Sections').first().json.job_id, threat_name: $('Aggregate Sections').first().json.threat_name, technique_ids: $('Aggregate Sections').first().json.technique_ids, severity: $('Aggregate Sections').first().json.severity, status: 'draft', markdown: $json.markdown, missing_techniques: $('Aggregate Sections').first().json.missing_techniques }) }}",
+        "options": {}
+      },
+      "id": "ab32e0c1-c036-4f20-b811-72745bbd6466",
+      "name": "Save Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4864,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Mock Wazuh Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock Wazuh Alert": {
+      "main": [
+        [
+          {
+            "node": "Normalize Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Alert": {
+      "main": [
+        [
+          {
+            "node": "Get Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sections": {
+      "main": [
+        [
+          {
+            "node": "Split Out Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out Sections": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Chunks": {
+      "main": [
+        [
+          {
+            "node": "Rate Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Guard": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generate": {
+      "main": [
+        [
+          {
+            "node": "Extract Section",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Section": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Sections": {
+      "main": [
+        [
+          {
+            "node": "Assemble Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Playbook": {
+      "main": [
+        [
+          {
+            "node": "Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "59b7fbac-eb1e-491d-a3e3-78d7f7a04a3c",
+  "meta": {
+    "instanceId": "f9ed0a5b595620e60fd1ffca74398356c321981b8b8a7a5d2d9e611e39b386fe"
+  },
+  "id": "G7rhauXeAOpga4vT",
+  "tags": []
+}
