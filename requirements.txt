@@ -1,0 +1,10 @@
+chromadb>=0.5.0
+google-generativeai>=0.8.0
+rich>=13.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+mitreattack-python>=3.0.0
+
+# เอาออกแล้ว (ตอบคำถามค้างใน HANDOFF.md เดิม §7):
+# - python-frontmatter: ไม่เคยถูก import จริง — 01_ingest.py เขียน parse_frontmatter เองแล้ว
+# - pymisp: ไม่ตรงกับแหล่ง CTI ที่ proposal ระบุ (VirusTotal/AbuseIPDB) และไม่เคยถูก import

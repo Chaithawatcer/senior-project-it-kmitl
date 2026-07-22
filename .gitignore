@@ -1,0 +1,44 @@
+# System files
+Thumbs.db
+desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Temporary/Logs
+*.log
+tmp/
+temp/
+
+# Gemini CLI / Assistant files
+.gemini/
+.agents/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Omnissiah — regenerable / generated artifacts (ไม่ต้อง push)
+# แต่ละคนรัน 01_ingest.py สร้างเองบนเครื่องตัวเอง
+chroma_db/
+poc/chroma_db/
+poc/output/
+output/
+
+# MITRE ATT&CK STIX data (~50MB) — ดาวน์โหลดเองด้วย gen_mitre_kb.py, ไม่ commit ไฟล์ดิบ
+Project/mitre_data/
+
+# โน้ตศึกษาส่วนตัว — ไม่ใช่ deliverable ของโปรเจกต์
+study/
