@@ -5,8 +5,12 @@ api.py — Omnissiah FastAPI wrapper (v2)
 รัน:  uvicorn api:app --host 0.0.0.0 --port 8000
 """
 
+import ipaddress
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,10 +19,15 @@ from chromadb.utils import embedding_functions
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from central_schema import AlertIngestRequest, build_case_record
+
 # --- Config ---
 CHROMA_DIR = str(Path(__file__).parent / "chroma_db")
 COLLECTION_NAME = "omnissiah_procedures"
 API_KEY = os.getenv("OMNISSIAH_API_KEY", "REPLACE_WITH_SHARED_SECRET")
+# ⚠️ ห้าม hardcode ค่าจริงตรงนี้หรือที่ไหนในโค้ดเด็ดขาด — ตั้งเป็น env var ก่อนรัน uvicorn เท่านั้น
+VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
+ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
 
 # ⚠️ ต้องเป็นตัวเดียวกับตอน ingest เป๊ะๆ (all-MiniLM-L6-v2)
 #    ถ้าเปลี่ยน model retrieval จะพังเงียบๆ — คืน chunk มั่วโดยไม่ error
@@ -44,6 +53,148 @@ app = FastAPI(title="Omnissiah RAG API", lifespan=lifespan)
 def verify_key(x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="invalid api key")
+
+
+# ---------------------------------------------------------------- alerts (Pipeline 1 เชิงรับ ขั้น 1-3)
+
+# ⚠️ ครอบคลุมเฉพาะ ARCHITECTURE.md §2 ขั้นที่ 1-3: รับ alert (webhook) → normalize เป็น
+# Central Schema + dedup + t0/t1 → สกัด observables — ขั้นที่ 4 เป็นต้นไป (CTI enrichment,
+# NCSC/Escalation, RAG playbook, Notification/Review Gate) ยังไม่เชื่อมกับ endpoint นี้
+# ในรอบนี้โดยตั้งใจ (ทำทีละท่อ ไม่ทำรวดเดียวทั้งเส้น)
+
+_CASES: dict[str, dict] = {}  # dedup_key -> CaseRecord (dict) — ในหน่วยความจำ เหมือน _STORE ของ playbooks
+
+
+@app.post("/alerts/ingest", dependencies=[Depends(verify_key)])
+def ingest_alert(req: AlertIngestRequest):
+    """
+    [1] รับ mock SIEM alert ผ่าน webhook — endpoint นี้เอง (n8n Webhook node เรียกมาตรง ๆ)
+    [2] Normalize → Central Schema, ประทับ t0-t1, ตรวจ dedup
+    [3] สกัด observables (IP, hash, account, host)
+
+    ถ้าเคยเห็น case ที่ dedup_key เดียวกันมาแล้ว คืนของเดิมทันที ไม่สร้าง case ใหม่
+    (เหตุผลเดียวกับ dedup ของ playbook — SIEM ยิง alert ซ้ำสำหรับเหตุการณ์ต่อเนื่องเดียวกันได้)
+    """
+    raw = req.model_dump()
+    case = build_case_record(raw)
+
+    existing = _CASES.get(case.dedup_key)
+    if existing:
+        return {"status": "dedup_hit", "case": existing}
+
+    case_dict = case.model_dump()
+    _CASES[case.dedup_key] = case_dict
+    return {"status": "created", "case": case_dict}
+
+
+@app.get("/alerts/{case_id}", dependencies=[Depends(verify_key)])
+def get_case(case_id: str):
+    for case in _CASES.values():
+        if case["case_id"] == case_id:
+            return case
+    raise HTTPException(status_code=404, detail="case not found")
+
+
+# ---------------------------------------------------------------- CTI enrichment (ARCHITECTURE.md ขั้นที่ 4)
+
+# เกณฑ์แปลงผลเป็น cti_verdict ตาม study/05-cti-enrichment-apis.md ของทีม
+
+
+def _is_private_ip(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def _check_virustotal(ip: str) -> dict | None:
+    if not VIRUSTOTAL_API_KEY:
+        return None
+    req = urllib.request.Request(
+        f"https://www.virustotal.com/api/v3/ip_addresses/{ip}",
+        headers={"x-apikey": VIRUSTOTAL_API_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        attrs = data.get("data", {}).get("attributes", {})
+        stats = attrs.get("last_analysis_stats", {})
+        return {
+            "malicious": stats.get("malicious", 0),
+            "suspicious": stats.get("suspicious", 0),
+            "reputation": attrs.get("reputation"),
+        }
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as e:
+        return {"error": str(e)}
+
+
+def _check_abuseipdb(ip: str) -> dict | None:
+    if not ABUSEIPDB_API_KEY:
+        return None
+    req = urllib.request.Request(
+        f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90",
+        headers={"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        d = data.get("data", {})
+        return {
+            "score": d.get("abuseConfidenceScore", 0),
+            "is_tor": d.get("isTor", False),
+            "total_reports": d.get("totalReports", 0),
+        }
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as e:
+        return {"error": str(e)}
+
+
+class CtiEnrichRequest(BaseModel):
+    ip: str = ""
+
+
+@app.post("/cti/enrich", dependencies=[Depends(verify_key)])
+def cti_enrich(req: CtiEnrichRequest):
+    """
+    เช็ค IP กับ VirusTotal + AbuseIPDB แปลงเป็น cti_verdict ให้ /assess/severity ใช้ต่อ
+    เกณฑ์: malicious = VT malicious>=5 หรือ AbuseIPDB score>=75
+           suspicious = VT malicious 1-4 หรือ score 25-74 หรือ isTor
+           clean      = นอกเหนือจากนั้น (ต้องเช็คได้จริงอย่างน้อย 1 แหล่ง)
+           unknown    = ไม่มี IP ให้เช็ค หรือไม่ได้ตั้ง API key ไว้เลยสักตัว
+    """
+    ip = (req.ip or "").strip()
+    if not ip:
+        return {"ip": ip, "cti_verdict": "unknown", "virustotal": None, "abuseipdb": None,
+                "reason": "ไม่มี IP ให้ตรวจสอบ"}
+
+    if _is_private_ip(ip):
+        return {"ip": ip, "cti_verdict": "clean", "virustotal": None, "abuseipdb": None,
+                "reason": "internal/private IP — ข้าม enrichment"}
+
+    vt = _check_virustotal(ip)
+    abuse = _check_abuseipdb(ip)
+
+    if vt is None and abuse is None:
+        return {"ip": ip, "cti_verdict": "unknown", "virustotal": None, "abuseipdb": None,
+                "reason": "ไม่ได้ตั้ง VIRUSTOTAL_API_KEY / ABUSEIPDB_API_KEY ไว้เลย"}
+
+    vt_malicious = vt.get("malicious", 0) if vt and "error" not in vt else 0
+    abuse_score = abuse.get("score", 0) if abuse and "error" not in abuse else 0
+    is_tor = abuse.get("is_tor", False) if abuse and "error" not in abuse else False
+
+    if vt_malicious >= 5 or abuse_score >= 75:
+        verdict = "malicious"
+    elif vt_malicious >= 1 or 25 <= abuse_score < 75 or is_tor:
+        verdict = "suspicious"
+    else:
+        verdict = "clean"
+
+    return {
+        "ip": ip,
+        "cti_verdict": verdict,
+        "virustotal": vt,
+        "abuseipdb": abuse,
+        "reason": f"vt_malicious={vt_malicious}, abuseipdb_score={abuse_score}, is_tor={is_tor}",
+    }
 
 
 # ---------------------------------------------------------------- template
@@ -262,6 +413,14 @@ class NcscAssessment(BaseModel):
     sla_minutes: int
 
 
+class CtiResult(BaseModel):
+    ip: str
+    cti_verdict: str
+    reason: str
+    virustotal: dict | None = None
+    abuseipdb: dict | None = None
+
+
 class AssembleRequest(BaseModel):
     threat_name: str
     technique_ids: list[str]
@@ -272,6 +431,7 @@ class AssembleRequest(BaseModel):
     fallback_used: bool = False
     job_id: str | None = None
     ncsc: NcscAssessment | None = None  # ผลจาก POST /assess/severity — None ถ้ายังไม่เรียก
+    cti: CtiResult | None = None  # ผลจาก POST /cti/enrich — None ถ้ายังไม่เรียก
 
 
 @app.post("/playbooks/assemble", dependencies=[Depends(verify_key)])
@@ -302,6 +462,23 @@ def assemble(req: AssembleRequest):
     for k, v in req.alert.items():
         parts.append(f"| {k} | {v} |")
     parts.append("")
+
+    if req.cti:
+        c = req.cti
+        vt_mal = (c.virustotal or {}).get("malicious", "-") if c.virustotal else "-"
+        abuse_score = (c.abuseipdb or {}).get("score", "-") if c.abuseipdb else "-"
+        parts += [
+            "## CTI Enrichment (Threat Intelligence)",
+            "",
+            "| Field | Value |",
+            "|---|---|",
+            f"| Source IP | {c.ip} |",
+            f"| Verdict | {c.cti_verdict} |",
+            f"| VirusTotal malicious | {vt_mal} |",
+            f"| AbuseIPDB score | {abuse_score} |",
+            f"| หมายเหตุ | {c.reason} |",
+            "",
+        ]
 
     if req.ncsc:
         n = req.ncsc
@@ -344,6 +521,7 @@ class SavePlaybook(BaseModel):
     job_id: str | None = None
     ncsc_category: str | None = None
     escalation_tier: int | None = None
+    case_id: str | None = None  # เชื่อมกลับไป CaseRecord จาก /alerts/ingest (ถ้ามี)
 
 
 @app.get("/playbooks/lookup", dependencies=[Depends(verify_key)])
