@@ -1,0 +1,548 @@
+{
+  "name": "Omnissiah — Proactive Intel Playbook (Manual + Mock Feed)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a0000000-0000-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        2144,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mock CTI feed — ของจริงคือ Schedule Trigger + RSS Read (CISA / The Hacker News)\n// จงใจใส่ 2 ข่าวที่เป็น \"เรื่องเดียวกันคนละสำนัก\" เพื่อ demo dedup ข้ามแหล่งข่าว:\n// ข่าวแรกจะได้ status=created ข่าวที่สองต้องได้ status=dedup_hit (อ้าง CVE ชุดเดียวกัน)\nreturn [\n  { json: {\n      source: 'The Hacker News',\n      title: 'New Brute-Force Campaign Targets Active Directory via RDP and Password Spraying',\n      link: 'https://thehackernews.com/2026/08/ad-bruteforce-campaign.html',\n      published: '2026-08-21T02:10:00Z',\n      content: 'Researchers have uncovered a large-scale campaign targeting enterprise Active Directory environments. The attackers perform password spraying (T1110.003) and password guessing (T1110.001) against domain accounts, then move laterally over RDP (T1021.001). Attack traffic originates from 45.155.205[.]233 and 185.220.101[.]45, and tooling is hosted at hxxp://ad-brute-tools[.]top/payload.exe (SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855). The campaign abuses weak password policies, and organizations lagging on CVE-2025-21298 patching face elevated risk. Administrators are urged to enforce account lockout policies and monitor failed logon events.'\n  }},\n  { json: {\n      source: 'CISA',\n      title: 'CISA Advisory: Ongoing Brute-Force Activity Against Active Directory Environments',\n      link: 'https://www.cisa.gov/news-events/alerts/2026/08/21/ad-bruteforce',\n      published: '2026-08-21T06:00:00Z',\n      content: 'CISA is aware of ongoing brute-force activity targeting Active Directory. Threat actors conduct password spraying (T1110.003) and use RDP (T1021.001) for lateral movement, with activity linked to 45.155.205[.]233. Organizations should prioritize remediation of CVE-2025-21298 and review authentication logs.'\n  }}\n];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000002",
+      "name": "Mock CTI Feed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/intel/ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000003",
+      "name": "Ingest Intel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2592,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-status-created",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "created",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000004",
+      "name": "Filter New Intel",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        2816,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 1
+      },
+      "id": "a0000000-0000-4000-8000-000000000005",
+      "name": "Limit 1 Story",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        3040,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/template/sections?pipeline=proactive",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000006",
+      "name": "Get Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3264,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "sections",
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000007",
+      "name": "Split Out Sections",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        3488,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/retrieve",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phase: $json.phase, technique_ids: $('Limit 1 Story').first().json.intel.mitre_techniques, query: `${$('Limit 1 Story').first().json.intel.threat_name} ${$json.phase} defense hardening detection ${$('Limit 1 Story').first().json.intel.mitre_techniques.join(' ')}`, top_k: 5, doc_types: [\"defense\", \"mitre\"] }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000008",
+      "name": "Retrieve Chunks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3712,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "a0000000-0000-4000-8000-000000000009",
+      "name": "Rate Guard",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3936,
+        -272
+      ],
+      "webhookId": "b2000000-0000-4000-8000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ประกอบ prompt เชิงรุก: fill_instruction + facts จากข่าว (verbatim) + IoCs + RAG chunks\nconst intel = $('Limit 1 Story').first().json.intel;\nconst sec = $('Split Out Sections').item.json;\nconst rag = $json;\n\nconst chunks = (rag.chunks ?? []).map((c, i) => `[${i + 1}] (${c.source_doc})\\n${c.text}`).join('\\n---\\n');\nconst missing = rag.missing_techniques ?? [];\n\nconst factsBlock = (intel.facts ?? []).map((f, i) => `(${i + 1}) ${f}`).join('\\n');\nconst iocLines = [\n  ...(intel.iocs.ips ?? []).map(v => `IP: ${v}`),\n  ...(intel.iocs.domains ?? []).map(v => `Domain: ${v}`),\n  ...(intel.iocs.hashes ?? []).map(v => `Hash: ${v}`),\n  ...(intel.iocs.cves ?? []).map(v => `CVE: ${v}`)\n].join('\\n');\n\nconst intelContext = [\n  `Threat report: ${intel.threat_name}`,\n  `Source: ${intel.feed_name} (${intel.link ?? '-'})`,\n  `Techniques: ${intel.mitre_techniques.join(', ')}`\n].join('\\n');\n\nconst missingBlock = missing.length\n  ? `\\n⚠️ ไม่มีข้อมูลใน knowledge base รองรับ technique: ${missing.join(', ')}\\nให้แปะธง ⚠️ ในแถวที่เกี่ยวข้อง และห้ามแต่งขั้นตอนขึ้นเอง`\n  : '';\n\nconst prompt = `คุณเป็น SOC analyst ที่เขียนแผนป้องกันเชิงรุก (Proactive Defense Playbook) จากข่าวกรองภัยคุกคาม\nสำคัญ: องค์กรยังไม่ถูกโจมตี — นี่คือการเตรียมป้องกันล่วงหน้า ไม่ใช่การตอบสนองเหตุการณ์ที่เกิดแล้ว\n\n${sec.fill_instruction}\n\n--- THREAT INTELLIGENCE ---\n${intelContext}\n\n--- FACTS จากข่าว (คัดตรงจากต้นฉบับ) ---\n${factsBlock || '(ไม่มี)'}\n\n--- IoCs ---\n${iocLines || '(ไม่มี)'}\n\n--- KNOWLEDGE BASE (ใช้เฉพาะข้อมูลด้านล่างนี้เท่านั้น ห้ามเพิ่มจากความรู้ตัวเอง) ---\n${chunks || '(ไม่พบข้อมูลรองรับ)'}\n${missingBlock}\n\nเขียนที่ระดับแนวทาง/วิธีการ (procedure) ไม่ผูกกับ OS ใด OS หนึ่ง ยกคำสั่งเป็นตัวอย่างสั้นๆ ได้แต่ห้ามให้คำสั่งเป็นแกนหลักของขั้นตอน\n\nตอบเป็นตาราง Markdown เท่านั้น ไม่ต้องมีคำนำหรือคำสรุป`;\n\nreturn { json: { phase: sec.phase, heading: sec.heading, prompt } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "a0000000-0000-4000-8000-000000000010",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "Gemini-API"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 4096 } }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000011",
+      "name": "Gemini Generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4384,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';\nconst meta = $('Build Prompt').item.json;\n\nreturn {\n  json: {\n    phase: meta.phase,\n    heading: meta.heading,\n    content: text.trim()\n  }\n};",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "a0000000-0000-4000-8000-000000000012",
+      "name": "Extract Section",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4608,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ยุบ 3 items กลับเป็น 1 ก้อน (ฝั่งเชิงรุก — ไม่มี NCSC/CTI enrichment, ใช้ intel + IoC table แทน)\nconst intel = $('Limit 1 Story').first().json.intel;\nconst sections = $input.all().map(i => i.json);\n\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\n\nreturn [{\n  json: {\n    intel_id: intel.intel_id,\n    threat_name: intel.threat_name,\n    technique_ids: intel.mitre_techniques,\n    severity: 'advisory (proactive)',\n    alert: {},\n    sections,\n    missing_techniques: missing,\n    playbook_type: 'proactive',\n    intel_source: {\n      feed: intel.feed_name,\n      title: intel.title,\n      link: intel.link,\n      published: intel.published\n    },\n    iocs: intel.iocs\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000013",
+      "name": "Aggregate Sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4832,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/playbooks/assemble",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000014",
+      "name": "Assemble Playbook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5056,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/playbooks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ case_id: $('Aggregate Sections').first().json.intel_id, threat_name: $('Aggregate Sections').first().json.threat_name, technique_ids: $('Aggregate Sections').first().json.technique_ids, severity: $('Aggregate Sections').first().json.severity, status: 'draft', markdown: $json.markdown, missing_techniques: $('Aggregate Sections').first().json.missing_techniques }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000015",
+      "name": "Save Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5280,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/notify/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ pipeline: 'proactive', threat_name: $('Aggregate Sections').first().json.threat_name, technique_ids: $('Aggregate Sections').first().json.technique_ids, playbook_id: $json.playbook_id, ref_id: $('Aggregate Sections').first().json.intel_id, missing_techniques: $('Aggregate Sections').first().json.missing_techniques, iocs: $('Aggregate Sections').first().json.iocs, source: $('Aggregate Sections').first().json.intel_source }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000016",
+      "name": "Notify Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5504,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ก้อนสุดท้าย — สองข้อความพร้อมส่ง แยก field ให้ต่อ Teams/LINE node ในอนาคตได้ทันที\nreturn [{\n  json: {\n    playbook_id: $('Save Draft').first().json.playbook_id,\n    intel_id: $('Aggregate Sections').first().json.intel_id,\n    executive_message: $json.executive_message,\n    it_message: $json.it_message\n  }\n}];"
+      },
+      "id": "a0000000-0000-4000-8000-000000000017",
+      "name": "Prepare Notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5728,
+        -272
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Mock CTI Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock CTI Feed": {
+      "main": [
+        [
+          {
+            "node": "Ingest Intel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest Intel": {
+      "main": [
+        [
+          {
+            "node": "Filter New Intel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Intel": {
+      "main": [
+        [
+          {
+            "node": "Limit 1 Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit 1 Story": {
+      "main": [
+        [
+          {
+            "node": "Get Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sections": {
+      "main": [
+        [
+          {
+            "node": "Split Out Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out Sections": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Chunks": {
+      "main": [
+        [
+          {
+            "node": "Rate Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Guard": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generate": {
+      "main": [
+        [
+          {
+            "node": "Extract Section",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Section": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Sections": {
+      "main": [
+        [
+          {
+            "node": "Assemble Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Playbook": {
+      "main": [
+        [
+          {
+            "node": "Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Draft": {
+      "main": [
+        [
+          {
+            "node": "Notify Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Messages": {
+      "main": [
+        [
+          {
+            "node": "Prepare Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "tags": []
+}

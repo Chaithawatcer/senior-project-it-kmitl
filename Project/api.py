@@ -19,7 +19,13 @@ from chromadb.utils import embedding_functions
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from central_schema import AlertIngestRequest, build_case_record
+from central_schema import (
+    AlertIngestRequest,
+    IntelIngestRequest,
+    build_case_record,
+    build_intel_record,
+    defang,
+)
 
 # --- Config ---
 CHROMA_DIR = str(Path(__file__).parent / "chroma_db")
@@ -93,6 +99,45 @@ def get_case(case_id: str):
         if case["case_id"] == case_id:
             return case
     raise HTTPException(status_code=404, detail="case not found")
+
+
+# ---------------------------------------------------------------- intel (Pipeline 2 เชิงรุก ขั้น 1-3)
+
+# ⚠️ ครอบคลุม ARCHITECTURE.md §3 ขั้นที่ 1-3: รับข่าวจาก feed (mock ก่อน) → normalize เป็น
+# IntelRecord + dedup ข้ามแหล่งข่าว + t0/t1 → สกัด facts (verbatim) + IoCs + technique
+# ขั้นที่ 4 (LLM map พฤติกรรม→technique) และขั้นที่ 5 (coverage tier เต็มรูปแบบ) ยังไม่ทำ —
+# mock phase ใช้ T-code ที่ปรากฏในข่าวตรง ๆ และใช้ missing_techniques เดิมเป็น coverage flag
+
+_INTEL: dict[str, dict] = {}  # dedup_key -> IntelRecord (dict) — in-memory เหมือน _CASES
+
+
+@app.post("/intel/ingest", dependencies=[Depends(verify_key)])
+def ingest_intel(req: IntelIngestRequest):
+    """
+    [1] รับข่าว/advisory 1 ชิ้นจาก CTI feed (n8n Schedule+RSS ของจริง / Mock CTI Feed ตอนนี้)
+    [2] Normalize → IntelRecord, ประทับ t0-t1, dedup ข้ามแหล่งข่าว (เรื่องเดียวกันคนละสำนัก → hit)
+    [3] สกัด facts แบบ verbatim + IoCs (IP/hash/domain/CVE) + MITRE technique
+
+    เจอ dedup_key ซ้ำ = ข่าวเรื่องเดียวกันที่เคยประมวลผลแล้ว คืนของเดิม ไม่สร้าง playbook ซ้ำ
+    """
+    raw = req.model_dump()
+    intel = build_intel_record(raw)
+
+    existing = _INTEL.get(intel.dedup_key)
+    if existing:
+        return {"status": "dedup_hit", "intel": existing}
+
+    intel_dict = intel.model_dump()
+    _INTEL[intel.dedup_key] = intel_dict
+    return {"status": "created", "intel": intel_dict}
+
+
+@app.get("/intel/{intel_id}", dependencies=[Depends(verify_key)])
+def get_intel(intel_id: str):
+    for intel in _INTEL.values():
+        if intel["intel_id"] == intel_id:
+            return intel
+    raise HTTPException(status_code=404, detail="intel not found")
 
 
 # ---------------------------------------------------------------- CTI enrichment (ARCHITECTURE.md ขั้นที่ 4)
@@ -232,10 +277,48 @@ SECTIONS = [
 ]
 
 
+# Sections ของ proactive playbook (ARCHITECTURE.md §3 ขั้นที่ 6: แนวทางตรวจสอบผลกระทบ,
+# ขั้นตอนปิดช่องโหว่, ข้อเสนอกฎตรวจจับ — ตาราง IoCs ประกอบใน assemble แบบ deterministic ไม่ใช้ LLM)
+#
+# ⚠️ field `phase` ยังต้องเป็น 3 ค่าเดิม (containment/eradication/recovery) เพราะเป็น metadata
+# ที่ KB ใน ChromaDB ผูกไว้ — เปลี่ยนแล้ว retrieval จะกรองไม่เจอเงียบ ๆ (HANDOFF.md §4.2)
+# สิ่งที่ต่างจากฝั่งเชิงรับคือ heading + fill_instruction เท่านั้น (มุมมองเชิงป้องกัน ไม่ใช่ตอบสนองเหตุ)
+PROACTIVE_SECTIONS = [
+    {
+        "phase": "containment",
+        "heading": "Part 1: Impact Assessment & Immediate Hardening",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | วิธีตรวจสอบ/การกระทำ | สิ่งที่บ่งชี้ว่าได้รับผลกระทบ |\n"
+            "เนื้อหา: องค์กร**ยังไม่ถูกโจมตี** — แนวทางตรวจสอบว่าองค์กรมีความเสี่ยง/ร่องรอยตามภัยคุกคามในข่าวหรือไม่ "
+            "(hunt ด้วย IoC ที่ให้มา) และมาตรการลดพื้นผิวโจมตีที่ทำได้ทันทีระหว่างรอปิดช่องโหว่ถาวร"
+        ),
+    },
+    {
+        "phase": "eradication",
+        "heading": "Part 2: Vulnerability Remediation & Hardening",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | รายละเอียด | เกณฑ์ยืนยันว่าสำเร็จ |\n"
+            "เนื้อหา: ขั้นตอนปิดช่องโหว่/จุดอ่อนที่ภัยคุกคามในข่าวใช้ (patch, นโยบายรหัสผ่าน, ปิด service, "
+            "จำกัดสิทธิ์) เชิงป้องกันล่วงหน้า — ไม่ใช่การกำจัดผู้โจมตีที่เข้ามาแล้ว"
+        ),
+    },
+    {
+        "phase": "recovery",
+        "heading": "Part 3: Detection Rules & Monitoring",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | สิ่งที่ต้องเฝ้าระวัง | แหล่ง log/เครื่องมือ | เงื่อนไขการแจ้งเตือน |\n"
+            "เนื้อหา: ข้อเสนอกฎตรวจจับ (detection rules) และการเฝ้าระวังต่อเนื่อง เพื่อให้ตรวจพบได้เร็ว"
+            "หากภัยคุกคามตามข่าวมาถึงองค์กรจริง"
+        ),
+    },
+]
+
+
 @app.get("/template/sections", dependencies=[Depends(verify_key)])
-def get_sections():
+def get_sections(pipeline: str = "reactive"):
     # ห่อด้วย key "sections" เพื่อให้ n8n Split Out node มี field ให้แตก
-    return {"sections": SECTIONS}
+    # ?pipeline=proactive → sections ฝั่งเชิงรุก (default เดิม = reactive, ไม่กระทบ workflow เก่า)
+    return {"sections": PROACTIVE_SECTIONS if pipeline == "proactive" else SECTIONS}
 
 
 # ---------------------------------------------------------------- retrieve
@@ -340,8 +423,8 @@ class SeverityAssessRequest(BaseModel):
     account_privilege: str  # "domain_admin" | "privileged" | "standard" | "unknown"
     attack_success: bool = False  # มี event ล็อกอินสำเร็จ (เช่น 4624) จาก IP/บัญชีเดียวกันหรือไม่
     distinct_accounts: int = 1  # >1 = เข้าข่าย spraying/ขอบเขตกว้าง
-    # ⚠️ TODO: ตอนนี้ CTI enrichment (VirusTotal/AbuseIPDB) ยังไม่ implement (HANDOFF.md งานที่เหลือข้อ 4)
-    # cti_verdict จึงมักเป็น "unknown" เสมอ — เมื่อต่อ CTI จริงแล้วให้ส่งค่า malicious/suspicious/clean มาแทน
+    # ค่าจริงมาจาก POST /cti/enrich (n8n node "CTI Enrichment" เรียกก่อนแล้วส่งต่อมา)
+    # "unknown" เกิดได้เมื่อ private IP / ไม่มี IP / ไม่ได้ตั้ง VT+AbuseIPDB key
     cti_verdict: str = "unknown"  # "malicious" | "suspicious" | "clean" | "unknown"
 
 
@@ -432,11 +515,18 @@ class AssembleRequest(BaseModel):
     job_id: str | None = None
     ncsc: NcscAssessment | None = None  # ผลจาก POST /assess/severity — None ถ้ายังไม่เรียก
     cti: CtiResult | None = None  # ผลจาก POST /cti/enrich — None ถ้ายังไม่เรียก
+    # ⭐ ฝั่งเชิงรุก (Pipeline 2) — reactive เดิมไม่ต้องส่ง 3 field นี้ พฤติกรรมเดิมไม่เปลี่ยน
+    playbook_type: str = "reactive"  # "reactive" | "proactive" — เปลี่ยนหัวเอกสาร
+    intel_source: dict | None = None  # {feed, title, link, published} จาก IntelRecord
+    iocs: dict | None = None  # {ips, hashes, domains, cves} — แสดงเป็นตาราง IoC (defang ก่อนเสมอ)
 
 
 @app.post("/playbooks/assemble", dependencies=[Depends(verify_key)])
 def assemble(req: AssembleRequest):
-    parts = [f"# 🛡️ Incident Response Playbook: {req.threat_name}", ""]
+    if req.playbook_type == "proactive":
+        parts = [f"# 📡 Proactive Defense Playbook: {req.threat_name}", ""]
+    else:
+        parts = [f"# 🛡️ Incident Response Playbook: {req.threat_name}", ""]
 
     if req.missing_techniques:
         parts += [
@@ -451,7 +541,8 @@ def assemble(req: AssembleRequest):
         "> [!CAUTION]",
         "> **สถานะ: DRAFT** — ยังไม่ผ่าน human review ห้ามนำไปใช้จริงก่อนได้รับการอนุมัติ",
         "",
-        "## Alert Context",
+        # ฝั่งเชิงรุกไม่มี alert — หัวข้อ "Alert Context" จะทำให้เข้าใจผิดว่าเกิดเหตุแล้ว
+        "## Threat Summary" if req.playbook_type == "proactive" else "## Alert Context",
         "",
         "| Field | Value |",
         "|---|---|",
@@ -462,6 +553,38 @@ def assemble(req: AssembleRequest):
     for k, v in req.alert.items():
         parts.append(f"| {k} | {v} |")
     parts.append("")
+
+    if req.intel_source:
+        s = req.intel_source
+        parts += [
+            "## Threat Intelligence Source",
+            "",
+            "| Field | Value |",
+            "|---|---|",
+            f"| Feed | {s.get('feed', '-')} |",
+            f"| Title | {s.get('title', '-')} |",
+            f"| Link | {s.get('link', '-')} |",
+            f"| Published | {s.get('published', '-')} |",
+            "",
+        ]
+
+    if req.iocs:
+        # แสดง IoC แบบ defang เสมอ — เอกสารนี้ถูกส่งต่อหลายมือ กันคนเผลอคลิก/เครื่องมือ auto-link
+        parts += [
+            "## IoC Table (Indicators of Compromise)",
+            "",
+            "| Type | Indicator (defanged) |",
+            "|---|---|",
+        ]
+        for ip in req.iocs.get("ips", []):
+            parts.append(f"| IP | {defang(ip)} |")
+        for domain in req.iocs.get("domains", []):
+            parts.append(f"| Domain | {defang(domain)} |")
+        for h in req.iocs.get("hashes", []):
+            parts.append(f"| Hash | {h} |")
+        for cve in req.iocs.get("cves", []):
+            parts.append(f"| CVE | {cve} |")
+        parts.append("")
 
     if req.cti:
         c = req.cti
@@ -536,3 +659,126 @@ def save_playbook(req: SavePlaybook):
     key = dedup_key(req.technique_ids, req.threat_name)
     _STORE[key] = req.model_dump()
     return {"playbook_id": key, "status": req.status}
+
+
+# ---------------------------------------------------------------- notification messages (ARCHITECTURE.md §5 Output & Notification)
+
+# สร้าง "ข้อความแจ้งเตือน" 2 ฉบับจากผลลัพธ์ปลายเส้น — ผู้บริหาร (ไม่มีศัพท์เทคนิค) กับฝ่ายไอที/SOC
+# (เทคนิคเต็ม + IoC defanged) — เป็น deterministic template ใน FastAPI ไม่ใช่ LLM ด้วยเหตุผลเดียวกับ
+# NCSC (§4.6 ใน HANDOFF.md): ข้อความแจ้งเตือนคือสิ่งที่คนอ่านแล้วตัดสินใจ ห้ามมีโอกาส hallucinate
+#
+# ⚠️ ยังไม่ส่งเข้า Teams/LINE จริง (ช่องทางยังไม่ตัดสินใจ — LINE Notify ปิดบริการแล้ว) — endpoint นี้
+# คืน "ตัวข้อความพร้อมส่ง" ให้ n8n เอาไปต่อกับ channel node ทีหลังได้เลยโดยไม่ต้องแก้ logic
+
+
+class NotifyRequest(BaseModel):
+    pipeline: str = "reactive"  # "reactive" | "proactive"
+    threat_name: str
+    technique_ids: list[str] = []
+    playbook_id: str | None = None
+    ref_id: str | None = None  # case_id (เชิงรับ) หรือ intel_id (เชิงรุก)
+    severity: str | None = None
+    ncsc: NcscAssessment | None = None  # เชิงรับ — มีผล NCSC/Escalation
+    missing_techniques: list[str] = []
+    iocs: dict | None = None  # เชิงรุก — {ips, hashes, domains, cves}
+    source: dict | None = None  # เชิงรุก — {feed, title, link}
+
+
+@app.post("/notify/messages", dependencies=[Depends(verify_key)])
+def notify_messages(req: NotifyRequest):
+    proactive = req.pipeline == "proactive"
+
+    # ---------- ข้อความผู้บริหาร: สั้น ไม่มีศัพท์เทคนิค/IoC บอกผลกระทบ+สถานะ+สิ่งที่ต้องการ ----------
+    exec_lines = ["📢 สรุปสถานการณ์ความมั่นคงปลอดภัยไซเบอร์ (สำหรับผู้บริหาร)", ""]
+    exec_lines.append(f"เรื่อง: {req.threat_name}")
+
+    if proactive:
+        feed = (req.source or {}).get("feed", "แหล่งข่าวกรองภัยคุกคาม")
+        exec_lines += [
+            "ประเภท: การแจ้งเตือนเชิงรุกจากข่าวกรองภัยคุกคาม (ยังไม่พบการโจมตีในระบบขององค์กร)",
+            f"ที่มา: รายงานสาธารณะจาก {feed}",
+            "",
+            "สถานการณ์: มีรายงานภัยคุกคามใหม่ที่อาจส่งผลกระทบต่อระบบขององค์กร "
+            "ทีมความปลอดภัยได้จัดทำแผนป้องกันล่วงหน้า (ฉบับร่าง) เรียบร้อยแล้ว "
+            "ขณะนี้อยู่ระหว่างการตรวจสอบยืนยันโดยนักวิเคราะห์ก่อนดำเนินการจริง",
+            "",
+            "สิ่งที่ต้องการจากท่าน: รับทราบสถานการณ์ — หากการปิดช่องโหว่ต้องหยุดระบบชั่วคราว "
+            "ทีมจะเสนอขออนุมัติเป็นลำดับถัดไป",
+        ]
+    else:
+        level_text = (
+            f"{req.ncsc.ncsc_category} ({req.ncsc.category_name}) — ผู้รับผิดชอบ: {req.ncsc.escalation_owner}, "
+            f"กรอบเวลาตอบสนอง {req.ncsc.sla_minutes} นาที"
+            if req.ncsc
+            else (req.severity or "อยู่ระหว่างประเมิน")
+        )
+        exec_lines += [
+            "ประเภท: การแจ้งเตือนจากระบบเฝ้าระวัง (ตรวจพบความพยายามโจมตีจริง)",
+            f"ระดับความรุนแรง: {level_text}",
+            "",
+            "สถานการณ์: ระบบเฝ้าระวังตรวจพบความพยายามโจมตีต่อระบบขององค์กร "
+            "ทีมความปลอดภัยได้รับแจ้งตามลำดับขั้นแล้ว และมีแผนรับมือ (ฉบับร่าง) พร้อมใช้งาน "
+            "อยู่ระหว่างการตรวจสอบยืนยันโดยนักวิเคราะห์",
+            "",
+            "สิ่งที่ต้องการจากท่าน: รับทราบสถานการณ์ — หากยืนยันว่าเป็นเหตุการณ์จริงและลุกลาม "
+            "ทีมจะรายงานเพิ่มเติมพร้อมคำขออนุมัติมาตรการที่กระทบผู้ใช้งาน",
+        ]
+
+    exec_lines += ["", "— ข้อความนี้สร้างโดยระบบ Omnissiah (อัตโนมัติ) ยืนยันข้อมูลกับทีม SOC ก่อนตัดสินใจสำคัญ"]
+
+    # ---------- ข้อความฝ่ายไอที/SOC: เทคนิคเต็ม + IoC defanged + ขั้นตอนถัดไปชัดเจน ----------
+    it_lines = ["🔧 แจ้งฝ่ายไอที / SOC — มีงานต้องดำเนินการ", ""]
+    it_lines.append(f"Threat: {req.threat_name}")
+    it_lines.append(f"Pipeline: {'เชิงรุก (proactive — จากข่าวกรอง ยังไม่เกิดเหตุ)' if proactive else 'เชิงรับ (reactive — ตรวจพบจาก SIEM)'}")
+    if req.technique_ids:
+        it_lines.append(f"MITRE Techniques: {', '.join(req.technique_ids)}")
+    if req.ref_id:
+        it_lines.append(f"Reference: {req.ref_id}")
+    if req.playbook_id:
+        it_lines.append(f"Playbook (DRAFT): {req.playbook_id}")
+    if req.ncsc:
+        it_lines.append(
+            f"NCSC: {req.ncsc.ncsc_category} ({req.ncsc.category_name}) | "
+            f"Tier {req.ncsc.escalation_tier} — {req.ncsc.escalation_owner} | SLA {req.ncsc.sla_minutes} นาที"
+        )
+    if req.source and req.source.get("link"):
+        it_lines.append(f"Source: {req.source.get('feed', '-')} — {req.source['link']}")
+
+    if req.iocs:
+        ioc_items = (
+            [f"IP: {defang(ip)}" for ip in req.iocs.get("ips", [])]
+            + [f"Domain: {defang(d)}" for d in req.iocs.get("domains", [])]
+            + [f"Hash: {h}" for h in req.iocs.get("hashes", [])]
+            + [f"CVE: {c}" for c in req.iocs.get("cves", [])]
+        )
+        if ioc_items:
+            it_lines += ["", "IoCs สำหรับ block/hunt (defanged — ห้ามเปิดตรง ๆ):"]
+            it_lines += [f"  • {item}" for item in ioc_items]
+
+    it_lines += ["", "ขั้นตอนถัดไป:"]
+    if proactive:
+        it_lines += [
+            "  1. Review playbook draft แล้วกดอนุมัติ/แก้ไขก่อนใช้จริง (Human Review Gate)",
+            "  2. Hunt IoC ข้างต้นใน log ย้อนหลัง — ยืนยันว่าองค์กรยังไม่ถูกโจมตี",
+            "  3. วางแผน patch/hardening ตาม Part 2 ของ playbook",
+        ]
+    else:
+        it_lines += [
+            "  1. Review playbook draft แล้วกดอนุมัติ/แก้ไขก่อนใช้จริง (Human Review Gate)",
+            "  2. ดำเนินการ containment ตาม playbook ภายใน SLA ที่กำหนด",
+            "  3. รายงานผลกลับตามลำดับ escalation",
+        ]
+
+    if req.missing_techniques:
+        it_lines += [
+            "",
+            f"⚠️ Knowledge Coverage Warning: ไม่มีข้อมูลใน KB รองรับ technique {', '.join(req.missing_techniques)} — "
+            "ส่วนที่เกี่ยวข้องใน playbook ต้องตรวจเข้มเป็นพิเศษ",
+        ]
+
+    it_lines += ["", "— สร้างโดยระบบ Omnissiah | สถานะ playbook: DRAFT (No Auto-Remediation — ระบบไม่สั่งอุปกรณ์ใด ๆ เอง)"]
+
+    return {
+        "executive_message": "\n".join(exec_lines),
+        "it_message": "\n".join(it_lines),
+    }

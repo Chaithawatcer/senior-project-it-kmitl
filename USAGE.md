@@ -16,13 +16,14 @@
 <repo root>/
 ├─ requirements.txt          Python dependencies
 ├─ ARCHITECTURE.md           สถาปัตยกรรมเป้าหมาย 6 layers
-├─ n8n-workflow.json         workflow เต็มเส้น (mock trigger → NCSC → RAG playbook)
-├─ n8n-workflow-reactive-ingest.json  workflow แยก — Webhook จริง → /alerts/ingest ⭐ ใหม่
+├─ n8n-workflow.json         workflow เชิงรับเต็มเส้น (mock alert → ingest → CTI → NCSC → RAG playbook)
+├─ n8n-workflow-reactive-ingest.json  workflow แยก — Webhook จริง → /alerts/ingest
+├─ n8n-workflow-proactive.json  workflow เชิงรุกเต็มเส้น (mock feed → dedup → RAG → notify) ⭐ ใหม่
 └─ Project/
-   ├─ central_schema.py      Central Schema: normalize + dedup + observable extraction ⭐ ใหม่
+   ├─ central_schema.py      Central Schema ทั้ง 2 ท่อ: CaseRecord (เชิงรับ) + IntelRecord (เชิงรุก) ⭐ อัปเดต
    ├─ 01_ingest.py           อ่าน playbooks/**/*.md → chunk → embed → ChromaDB (รองรับ subfolder)
    ├─ gen_mitre_kb.py        ดึง MITRE Mitigations ทางการเข้า KB (ต้องดาวน์โหลด STIX data ก่อน)
-   ├─ api.py                 FastAPI 8 endpoints ให้ n8n เรียก
+   ├─ api.py                 FastAPI 12 endpoints ให้ n8n เรียก
    ├─ playbooks/*.md         Knowledge Base ส่วน threat playbook (3 ไฟล์, doc_type=playbook)
    ├─ playbooks/defense/     KB ส่วนเอกสารป้องกันรายเทคนิค (doc_type=defense)
    ├─ playbooks/mitre/       KB ส่วน MITRE Mitigations ทางการ (doc_type=mitre, สร้างโดย gen_mitre_kb.py)
@@ -114,23 +115,39 @@ python -m uvicorn api:app --host 0.0.0.0 --port 8000
 ### ขั้นที่ 3 — Import workflow เข้า n8n
 
 1. เปิด n8n → เมนู ⋯ มุมขวาบน → **Import from File** → เลือก `n8n-workflow.json`
-2. แก้ค่าใน 5 node นี้ให้ตรงกับที่ตั้งไว้ขั้นที่ 2 (header `X-API-Key`):
-   `Assess Severity`, `Get Sections`, `Retrieve Chunks`, `Assemble Playbook`, `Save Draft`
+2. แก้ค่าใน **7 node** นี้ให้ตรงกับที่ตั้งไว้ขั้นที่ 2 (header `X-API-Key`):
+   `Ingest Alert`, `CTI Enrichment`, `Assess Severity`, `Get Sections`, `Retrieve Chunks`, `Assemble Playbook`, `Save Draft`
 3. node `Gemini Generate` → แก้ header `x-goog-api-key` จาก `Gemini-API` เป็น API key จริงจาก Google AI Studio
+   (⚠️ คนละ header name กับ node อื่น — ห้าม copy header ของ node นี้ไปวาง node อื่น)
 4. กด **Execute Workflow** (Manual Trigger)
 
-### ขั้นที่ 3.5 — Reactive Ingest Workflow (webhook จริง) ⭐ ใหม่
+### ขั้นที่ 3.5 — Reactive Ingest Workflow (webhook จริง)
 
-`n8n-workflow-reactive-ingest.json` เป็น workflow **แยกต่างหาก** จาก `n8n-workflow.json` — ทำเฉพาะ
-ARCHITECTURE.md §2 ขั้นที่ 1-3 (รับ alert ผ่าน webhook จริง → normalize เป็น Central Schema + dedup +
-t0/t1 → สกัด observables) **ยังไม่เชื่อมต่อกับขั้นที่ 4 เป็นต้นไป** (NCSC, RAG playbook ฯลฯ) โดยตั้งใจ —
-สองไฟล์นี้จะรวมเป็นเส้นเดียวในอนาคตเมื่อ Central Schema ถูกเชื่อมเข้ากับส่วนที่เหลือ
+`n8n-workflow-reactive-ingest.json` เป็น workflow **แยกต่างหาก** — สาธิตการรับ alert ผ่าน Webhook node
+จริง (แทน Mock Wazuh Alert) เข้า `/alerts/ingest` เดียวกันกับ workflow หลัก ใช้ตอนจะต่อ SIEM จริง
 
 1. Import `n8n-workflow-reactive-ingest.json` เข้า n8n เหมือนขั้นที่ 3
 2. แก้ header `X-API-Key` ใน node `Ingest Alert` ให้ตรงกับที่ตั้งไว้
 3. **Activate** workflow (toggle มุมขวาบนของหน้า editor — ต่างจาก `n8n-workflow.json` ที่ใช้ Manual Trigger กดรันเอง เพราะอันนี้ใช้ Webhook node ต้อง activate ก่อน webhook ถึงจะรับ request ได้จริง)
 4. ยิง POST ไปที่ URL ที่ node `Webhook` แสดง (ปกติ `http://localhost:5678/webhook/alerts/ingest`) ด้วย mock Wazuh alert (ดูตัวอย่าง JSON ใน `Project/central_schema.py`'s `AlertIngestRequest` หรือใน HANDOFF.md)
 5. ยิงซ้ำด้วย payload เดิมอีกครั้ง — ต้องได้ `"status": "dedup_hit"` คืน `case_id` เดิม เป็นการยืนยันว่า dedup ทำงาน
+
+### ขั้นที่ 3.6 — Proactive Workflow (Pipeline 2 เชิงรุก, mock feed) ⭐ ใหม่
+
+`n8n-workflow-proactive.json` คือ Pipeline 2 ทั้งเส้น: ข่าวกรองภัยคุกคาม → playbook ป้องกันล่วงหน้า +
+ข้อความแจ้งผู้บริหาร + ข้อความแจ้งฝ่ายไอที — ตอนนี้ใช้ **Mock CTI Feed** (Code node) แทน RSS จริง
+โดยจงใจใส่ข่าว 2 ชิ้นที่เป็น **เรื่องเดียวกันคนละสำนัก** (The Hacker News + CISA อ้าง CVE เดียวกัน)
+เพื่อสาธิต dedup ข้ามแหล่งข่าว: ชิ้นแรก `created` ชิ้นที่สอง `dedup_hit` แล้วถูก Filter ตัดทิ้ง
+
+1. Import `n8n-workflow-proactive.json` เข้า n8n
+2. แก้ header `X-API-Key` ใน **6 node**: `Ingest Intel`, `Get Sections`, `Retrieve Chunks`,
+   `Assemble Playbook`, `Save Draft`, `Notify Messages`
+3. node `Gemini Generate` → ใส่ Gemini key จริง (header `x-goog-api-key` เหมือน workflow หลัก)
+4. กด **Execute Workflow** — ผลลัพธ์สุดท้ายอยู่ที่ node `Prepare Notifications`:
+   `playbook_id` + `executive_message` (ผู้บริหาร — ไม่มีศัพท์เทคนิค/IoC) + `it_message` (ฝ่ายไอที — technique + IoC แบบ defang + ขั้นตอนถัดไป)
+
+ของจริงในอนาคต: แทน `Manual Trigger`+`Mock CTI Feed` ด้วย **Schedule Trigger + RSS Read** แล้วต่อ
+`Prepare Notifications` เข้า Teams/LINE node — logic ที่เหลือไม่ต้องแก้เลย
 
 ---
 
@@ -148,14 +165,16 @@ workflow ตั้ง URL เป็น `http://host.docker.internal:8000` ซึ
 
 ---
 
-## 5. Flow การทำงาน 14 node
+## 5. Flow การทำงาน
+
+### 5.1 เชิงรับ — `n8n-workflow.json` (15 node)
 
 ```
 Manual Trigger
   → Mock Wazuh Alert        สร้าง alert ปลอม: Windows AD Event 4625+4740, admin_somchai, T1110.001
-  → Normalize Alert         Wazuh schema → job payload (job_id, threat_name, technique_ids, severity,
-                             account_privilege, distinct_accounts, attack_success, cti_verdict)
-  → Assess Severity         POST /assess/severity   ได้ NCSC category + Escalation Matrix ⭐ ใหม่
+  → Ingest Alert            POST /alerts/ingest     normalize → CaseRecord + dedup + t0/t1 + observables
+  → CTI Enrichment          POST /cti/enrich        เช็ค IP กับ VirusTotal + AbuseIPDB → cti_verdict
+  → Assess Severity         POST /assess/severity   ได้ NCSC category + Escalation Matrix (ใช้ cti_verdict จริง)
   → Get Sections            GET /template/sections   ได้ 3 phase (containment/eradication/recovery)
   → Split Out Sections      แตกเป็น 3 item
   ┌─ วนต่อ phase ─────────────────────────────────┐
@@ -165,12 +184,36 @@ Manual Trigger
   │ → Gemini Generate       gemini-flash-lite-latest
   │ → Extract Section       ดึงข้อความออกจาก response
   └────────────────────────────────────────────────┘
-  → Aggregate Sections      รวม 3 phase + แนบผล Assess Severity
-  → Assemble Playbook       POST /playbooks/assemble   ได้ markdown (มี NCSC/Escalation table)
+  → Aggregate Sections      รวม 3 phase + แนบผล CTI + Assess Severity
+  → Assemble Playbook       POST /playbooks/assemble   ได้ markdown (มี CTI + NCSC/Escalation table)
   → Save Draft              POST /playbooks            เก็บสถานะ draft + ncsc_category + escalation_tier
 ```
 
 ผลลัพธ์สุดท้ายอยู่ใน output ของ node `Save Draft` — คลิกดูใน n8n ได้เลย
+
+### 5.2 เชิงรุก — `n8n-workflow-proactive.json` (17 node) ⭐ ใหม่
+
+```
+Manual Trigger
+  → Mock CTI Feed           ข่าว 2 ชิ้น "เรื่องเดียวกันคนละสำนัก" (Hacker News + CISA, CVE เดียวกัน)
+  → Ingest Intel            POST /intel/ingest      normalize → IntelRecord + dedup ข้ามแหล่งข่าว
+                                                     + สกัด facts (verbatim) / IoCs / techniques
+  → Filter New Intel        เอาเฉพาะ status=created (ข่าวซ้ำโดน dedup_hit ตัดทิ้งตรงนี้)
+  → Limit 1 Story           กัน Gemini ถูกยิงหลายเรื่องในรอบ demo เดียว
+  → Get Sections            GET /template/sections?pipeline=proactive  ได้ 3 sections เชิงป้องกัน
+  → Split Out Sections      แตกเป็น 3 item
+  ┌─ วนต่อ section ────────────────────────────────┐
+  │ → Retrieve Chunks       POST /retrieve          doc_types: ["defense","mitre"] (บริบทเชิงป้องกัน)
+  │ → Rate Guard → Build Prompt (facts+IoCs+chunks) → Gemini Generate → Extract Section
+  └────────────────────────────────────────────────┘
+  → Aggregate Sections      รวม 3 sections + intel_source + iocs
+  → Assemble Playbook       POST /playbooks/assemble   ได้ Proactive Defense Playbook + IoC table (defanged)
+  → Save Draft              POST /playbooks
+  → Notify Messages         POST /notify/messages      สร้างข้อความผู้บริหาร + ข้อความฝ่ายไอที
+  → Prepare Notifications   ก้อนสุดท้าย: playbook_id + executive_message + it_message
+```
+
+ผลลัพธ์สุดท้ายอยู่ใน output ของ node `Prepare Notifications`
 
 ---
 
@@ -180,14 +223,18 @@ Manual Trigger
 
 | Method | Path | หน้าที่ |
 |---|---|---|
-| POST | `/alerts/ingest` | ⭐ ใหม่ — [1] รับ SIEM alert ผ่าน webhook [2] normalize → Central Schema + dedup + t0/t1 [3] สกัด observables |
-| GET | `/alerts/{case_id}` | ⭐ ใหม่ — ดึง case ที่ ingest ไว้ด้วย case_id |
-| GET | `/template/sections` | คืนโครง 3 phase (containment/eradication/recovery) พร้อม fill_instruction |
+| POST | `/alerts/ingest` | เชิงรับ [1-3] — รับ SIEM alert → normalize เป็น CaseRecord + dedup + t0/t1 + สกัด observables |
+| GET | `/alerts/{case_id}` | ดึง case ที่ ingest ไว้ด้วย case_id |
+| POST | `/intel/ingest` | ⭐ ใหม่ — เชิงรุก [1-3]: รับข่าวจาก feed → IntelRecord + dedup ข้ามแหล่งข่าว + สกัด facts (verbatim)/IoCs/techniques |
+| GET | `/intel/{intel_id}` | ⭐ ใหม่ — ดึง intel record ที่ ingest ไว้ |
+| POST | `/cti/enrich` | เช็ค IP กับ VirusTotal + AbuseIPDB → `cti_verdict` (ต้องตั้ง env key ทั้งสอง ไม่งั้นได้ `unknown`) |
+| GET | `/template/sections` | คืนโครง 3 sections — default เชิงรับ (Phase 1-3), `?pipeline=proactive` ได้ชุดเชิงป้องกัน (Part 1-3) |
 | POST | `/assess/severity` | NCSC Categorisation (C2–C6) + Escalation Matrix แบบ deterministic |
 | POST | `/retrieve` | hybrid retrieval — กรอง `phase` (+ `doc_types` ถ้าระบุ) ที่ Chroma แล้วกรอง `technique_ids` ที่ Python |
-| POST | `/playbooks/assemble` | ประกอบ markdown + แปะธง DRAFT / Coverage Warning / NCSC-Escalation table |
+| POST | `/playbooks/assemble` | ประกอบ markdown + ธง DRAFT / Coverage Warning / CTI / NCSC-Escalation — ฝั่งรุกส่ง `playbook_type: "proactive"` + `intel_source` + `iocs` ได้ IoC table (defanged) |
 | GET | `/playbooks/lookup` | เช็ค dedup ด้วย `technique_ids` + `threat_name` |
-| POST | `/playbooks` | บันทึก playbook (รวม `ncsc_category`, `escalation_tier`) |
+| POST | `/playbooks` | บันทึก playbook (รวม `ncsc_category`, `escalation_tier`, `case_id`/`intel_id`) |
+| POST | `/notify/messages` | ⭐ ใหม่ — สร้างข้อความแจ้ง 2 ฉบับ: ผู้บริหาร (ไม่มีศัพท์เทคนิค) + ฝ่ายไอที (technique/IoC defanged/ขั้นตอน) — deterministic template ไม่ใช่ LLM |
 
 > `/alerts/ingest` กับ `/playbooks/lookup` เป็น dedup คนละชั้นกัน — `/alerts/ingest` กัน SIEM alert ซ้ำ
 > ตั้งแต่ต้นทาง (ก่อนรู้ด้วยซ้ำว่าจะสร้าง playbook ไหม) ส่วน `/playbooks/lookup` กัน generate playbook
@@ -220,6 +267,17 @@ curl -X POST http://localhost:8000/alerts/ingest \
     "full_log": "test alert"
   }'
 # ยิงซ้ำด้วย body เดิม -> ต้องได้ "status": "dedup_hit" คืน case_id เดิม
+
+# เชิงรุก: ingest ข่าวจาก CTI feed (mock) — ระบบสกัด IoCs/CVE/techniques + facts ให้เอง
+curl -X POST http://localhost:8000/intel/ingest \
+  -H "X-API-Key: $OMNISSIAH_API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "source": "The Hacker News",
+    "title": "New Brute-Force Campaign Targets Active Directory",
+    "link": "https://example.com/news",
+    "content": "Attackers perform password spraying (T1110.003) from 45.155.205[.]233. Patch CVE-2025-21298 urgently."
+  }'
+# ยิงข่าว "เรื่องเดียวกันจากสำนักอื่น" (อ้าง CVE ชุดเดียวกัน) -> ต้องได้ "status": "dedup_hit"
 ```
 
 ```powershell
