@@ -1,7 +1,7 @@
 # HANDOFF — Omnissiah (AI-Driven SOC Copilot)
 
 เอกสารส่งต่องาน สำหรับ **เพื่อนในทีมที่มาทำต่อ** และ **AI assistant ที่รับ context ใหม่**
-อัปเดตล่าสุด: 2026-07-21 (รอบแก้ไขให้ตรงกับ proposal + ARCHITECTURE.md)
+อัปเดตล่าสุด: 2026-07-23 (เพิ่ม §0.1 — Central Schema + webhook จริงบนบรานช์ `reactive-pipeline-1-2-3`)
 
 > ถ้าคุณเป็น AI assistant: อ่านไฟล์นี้ให้จบก่อนแก้โค้ด ส่วน §4 (ข้อตกลงที่ห้ามพัง) คือสิ่งที่แก้ผิดแล้วระบบพังเงียบ ๆ โดยไม่ error
 
@@ -24,6 +24,23 @@
 
 ---
 
+## 0.1 บรานช์ `reactive-pipeline-1-2-3` เพิ่มอะไรต่อจาก §0
+
+ต่อยอดจากรอบแก้ข้างบน — implement ARCHITECTURE.md §2 ขั้นที่ 1-3 ของ Pipeline 1 (เชิงรับ) แบบ**แยก
+workflow ต่างหาก** ไม่ปนกับ `n8n-workflow.json` เดิม (กันของเก่าที่ทดสอบผ่านแล้วพัง):
+
+| ไฟล์ | ทำอะไร |
+|---|---|
+| `Project/central_schema.py` (ใหม่) | Central Schema เต็ม: `CaseRecord`, `Timestamps` (t0-t6, เติมแค่ t0/t1), `Entities`, `compute_dedup_key()`, `normalize_alert()`, `extract_observables()` |
+| `Project/api.py` (แก้) | เพิ่ม `POST /alerts/ingest` (รับ webhook จริง → normalize → dedup → extract) และ `GET /alerts/{case_id}` |
+| `n8n-workflow-reactive-ingest.json` (ใหม่) | Webhook node จริง → HTTP Request → `/alerts/ingest` → Respond to Webhook |
+
+**ทดสอบจริงผ่าน n8n ไม่ใช่แค่จำลอง:** ดาวน์โหลด/รัน n8n จริงผ่าน `npx n8n` (ไม่มี Docker ในเครื่องทดสอบ), `publish:workflow` เพื่อ activate, `n8n start` ให้ webhook ทำงานค้าง, ยิง curl เข้า `http://localhost:5678/webhook/alerts/ingest` จริงด้วย Windows AD Event 4625/4740 — ได้ `CaseRecord` กลับมาครบ (`dedup_key`, `t0_ingested`/`t1_normalized`, `entities`), ยิงซ้ำได้ `status: dedup_hit` คืน `case_id` เดิม
+
+**ยังไม่เชื่อมกับส่วนที่เหลือ** — `/alerts/ingest` เป็น workflow แยกจาก `n8n-workflow.json` (ที่ยังใช้ Mock Wazuh Alert node เหมือนเดิม) โดยตั้งใจ เพราะ field ที่ `Assess Severity` ต้องใช้ (`account_privilege`, `attack_success`, `cti_verdict`) ยังไม่มีทางเทียบเท่าใน Central Schema ตอนนี้ — ต้องคุยกันก่อนว่าจะรวมสองเส้นยังไง
+
+---
+
 ## 1. อ่านอะไรก่อน
 
 | ลำดับ | ไฟล์ | ได้อะไร |
@@ -31,10 +48,12 @@
 | 1 | `ARCHITECTURE.md` | สถาปัตยกรรมเป้าหมาย 6 layers, 2 pipelines — **นี่คือปลายทาง ไม่ใช่ของที่มีอยู่จริงทั้งหมด** |
 | 2 | `HANDOFF.md` (ไฟล์นี้) | ของที่มีอยู่จริงตอนนี้ + เหตุผลเบื้องหลัง |
 | 3 | `USAGE.md` | วิธีติดตั้งและรัน |
-| 4 | `Project/api.py` | logic หลักทั้งหมดอยู่ที่นี่ |
-| 5 | `Project/01_ingest.py` | วิธี chunk เอกสารเข้า ChromaDB (รองรับ `doc_type` + subfolder แล้ว) |
-| 6 | `Project/gen_mitre_kb.py` | ดึง MITRE Mitigations ทางการเข้า KB (ใหม่) |
-| 7 | `n8n-workflow.json` | orchestration 14 nodes (เพิ่ม `Assess Severity`) |
+| 4 | `Project/central_schema.py` | Central Schema — normalize/dedup/extract observables (ใหม่ §0.1) |
+| 5 | `Project/api.py` | logic หลักทั้งหมดอยู่ที่นี่ |
+| 6 | `Project/01_ingest.py` | วิธี chunk เอกสารเข้า ChromaDB (รองรับ `doc_type` + subfolder แล้ว) |
+| 7 | `Project/gen_mitre_kb.py` | ดึง MITRE Mitigations ทางการเข้า KB |
+| 8 | `n8n-workflow.json` | orchestration เต็มเส้น 14 nodes (mock trigger → NCSC → RAG playbook) |
+| 9 | `n8n-workflow-reactive-ingest.json` | webhook จริงสำหรับ Pipeline 1 ขั้น 1-3 เท่านั้น (ใหม่ §0.1) |
 
 ---
 
@@ -42,8 +61,8 @@
 
 | Layer ตาม §1 | สถานะ | หมายเหตุ |
 |---|---|---|
-| [1] Ingestion (Pipeline 1) | 🟡 mock (แก้ scope แล้ว) | `Mock Wazuh Alert` ตอนนี้เป็น Windows AD Event 4625/4740 ตรง scope proposal แล้ว — ยังไม่มี webhook รับของจริง |
-| [2] Normalization | 🟢 ทำแล้ว | เพิ่ม derive `account_privilege`/`distinct_accounts`/`attack_success`/`cti_verdict` สำหรับป้อน `/assess/severity` |
+| [1] Ingestion (Pipeline 1) | 🟢 มี webhook จริงแล้ว (แยก workflow) | `n8n-workflow-reactive-ingest.json` มี Webhook node จริงเรียก `POST /alerts/ingest` — ทดสอบผ่านจริงแล้ว (§0.1) แต่ workflow สาธิตเต็มเส้น (`n8n-workflow.json`) ยังใช้ `Mock Wazuh Alert` เหมือนเดิม เพราะสองเส้นยังไม่ได้เชื่อมกัน |
+| [2] Normalization | 🟢 ทำแล้ว (2 จุด) | (ก) `Normalize Alert` ใน n8n derive `account_privilege`/`distinct_accounts`/`attack_success`/`cti_verdict` ป้อน `/assess/severity` (ข) `central_schema.py` ทำ Central Schema เต็มรูปแบบ + dedup + t0/t1 ผ่าน `/alerts/ingest` — **ยังเป็นคนละ schema กัน** ยังไม่ได้รวมเป็นอันเดียว |
 | [3] Enrichment & Analysis | 🟡 ครึ่งเดียว | **NCSC + Escalation Matrix ทำแล้ว** (deterministic, ดู §4.6) — **CTI enrichment (VirusTotal/AbuseIPDB) ยังไม่ทำ** `cti_verdict` เป็น `"unknown"` เสมอตอนนี้ |
 | [4] RAG Core | 🟢 ทำแล้ว + ขยาย | ChromaDB + hybrid retrieval + วนทีละ phase ครบ + รองรับ filter `doc_type` แล้ว (ยังไม่ได้ทำ tiering primary/secondary เต็มรูปแบบ) |
 | [5] Output & Notification | 🟡 ครึ่งเดียว | ประกอบ markdown ได้ (มี NCSC/Escalation table แล้ว) แต่ไม่มี Teams/LINE |
@@ -143,7 +162,7 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 | technique match ใช้ substring | `"T1110" in "T1110.001,..."` → True | parent technique match child ได้โดยบังเอิญ **แต่ทางกลับกันไม่ได้** — ถ้าเปลี่ยนเป็น exact match ต้องแก้ทั้ง KB |
 | `fallback_used` hardcode `False` | field ตายอยู่ | `Aggregate Sections` อ่านค่านี้ไปแต่ได้ `false` ตลอด |
 | Coverage tier (full/partial/none) ตาม ARCHITECTURE §4 ยังไม่มี | มี `doc_type` filter แล้วแต่ยังไม่ได้ใช้ตัดสิน tier, ไม่มี similarity threshold | ตอนนี้มีแค่ `missing_techniques` แบบ binary |
-| ไม่มี dedup กันยิงซ้ำพร้อมกัน / ไม่มี `t0`–`t6` timestamp | ARCHITECTURE พูดถึงแต่โค้ดยังไม่มี | วัด TTR ไม่ได้, race condition ตอนสองคนกด generate พร้อมกันได้ draft ซ้ำ |
+| `t0`/`t1` + dedup มีแล้วสำหรับ **alert ingestion** (`/alerts/ingest`, §0.1) แต่ `t2`–`t6` ยังว่างเสมอ และยังไม่เชื่อมกับ dedup ของ **playbook generation** (`/playbooks/lookup`, คนละ store กัน) | ยังวัด TTR เต็มเส้นไม่ได้ (แค่ t0-t1), race condition ตอนสอง request ยิง `/alerts/ingest` พร้อมกันยังเกิดได้ (`_CASES` เป็น dict เฉย ๆ ไม่มี unique index/lock) | ต้องรวม 2 schema เป็นอันเดียว + เพิ่ม lock ก่อนขึ้นระบบจริง |
 | API key เป็น plaintext ใน `n8n-workflow.json` | ค่าปัจจุบันเป็น placeholder | **ห้าม commit key จริงลงไฟล์นี้เด็ดขาด** |
 | MITRE mitigation chunk ซ้ำ 3 phase | ดู §3 หมายเหตุ | เก็บพื้นที่มากกว่าที่จำเป็น 3 เท่า — ยอมรับได้ตอนนี้ |
 | `cti_verdict` เป็น `"unknown"` เสมอ | CTI enrichment ยังไม่ทำ | NCSC category ที่ต้องพึ่ง CTI (เช่น C3 ในหลายเคส) ยังไม่แม่นเท่าที่ควร |
@@ -153,10 +172,10 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 
 ## 6. งานที่เหลือ — เรียงตามลำดับที่ควรทำ
 
-1. **CTI enrichment (VirusTotal/AbuseIPDB)** — คั่นระหว่าง `Normalize Alert` กับ `Assess Severity` แล้วแทนที่ `cti_verdict: "unknown"` ด้วยผลจริง (ดู `study/05-cti-enrichment-apis.md` มี endpoint/response format/เกณฑ์แปลงผลพร้อมใช้)
-2. **แทน Mock ด้วย Webhook จริง** — เพิ่ม `POST /alerts` ใน `api.py` แล้วเปลี่ยน trigger ใน n8n เป็น Webhook node
+1. **รวม Central Schema (`/alerts/ingest`) เข้ากับ workflow สร้าง playbook เต็มเส้น** ⭐ ใหม่ — ตอนนี้เป็น 2 workflow แยกกัน (§0.1) ต้องตัดสินใจว่า `Assess Severity` จะอ่าน field จาก `CaseRecord` โดยตรง หรือแปลง `CaseRecord` → job payload แบบเดิมก่อน
+2. **CTI enrichment (VirusTotal/AbuseIPDB)** — คั่นระหว่าง `/alerts/ingest` (หรือ `Normalize Alert`) กับ `Assess Severity` แล้วแทนที่ `cti_verdict: "unknown"` ด้วยผลจริง (ดู `study/05-cti-enrichment-apis.md` มี endpoint/response format/เกณฑ์แปลงผลพร้อมใช้)
 3. **Coverage tier เต็มรูปแบบ** — ใช้ `doc_type` filter ที่เพิ่งเพิ่ม + เปิด `distances` ใน `include=[...]` แล้วหา threshold จากการทดลอง **อย่าตั้งค่าลอย ๆ**
-4. **Persist `_STORE`** — SQLite ก็พอ
+4. **Persist `_STORE` และ `_CASES`** — SQLite ก็พอ ทั้งสอง store ยังเป็น in-memory dict
 5. **Notification + Review Gate** — Teams/LINE (⚠️ LINE Notify ปิดบริการแล้ว มี.ค. 2025 — ใช้ Messaging API หรือ Teams แทน) + กลไก Draft → Approved
 6. **Pipeline 2 (RSS)** — งานใหญ่สุด ทำท้ายสุด ใช้ RAG core ตัวเดิมได้เลย
 7. **แทน `ACCOUNT_PRIVILEGE_LOOKUP` ด้วย AD group membership query จริง** — ตอนต่อ AD จริงแล้ว
@@ -165,6 +184,7 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 
 ## 7. เรื่องที่ยังไม่ได้ตัดสินใจ (ต้องคุยกันก่อนลงมือ)
 
+- **จะรวม `CaseRecord` (Central Schema, §0.1) กับ job payload เดิมของ `Normalize Alert` ยังไง** — ตอนนี้เป็นคนละ schema กันโดยสิ้นเชิง มีบางฟิลด์ซ้ำความหมายกัน (`threat_name`, `technique_ids`/`mitre_techniques`) ต่างชื่อกัน ต้องเลือกว่าจะยึด schema ไหนเป็นหลักก่อนเชื่อม 2 workflow
 - **ARCHITECTURE.md §2 ขั้นที่ 5 เขียนว่า NCSC เป็น "LLM node" แต่ implementation จริงเป็น deterministic Python (§4.6)** — ยอมรับการเบี่ยงนี้ไหม หรือปรับถ้อยคำ ARCHITECTURE.md ให้ตรงกับของจริง
 - **MITRE mitigation chunk ที่ duplicate ลง 3 phase (§3)** — ทางออกชั่วคราว ควรทำ retrieval แบบ phase-agnostic สำหรับ `doc_type=mitre` จริงจังกว่านี้ไหม
 - **จะย้ายไป `google-genai` SDK ไหม** — `requirements.txt` ยังใช้ `google-generativeai` ซึ่ง Google deprecate แล้ว ตอนนี้ n8n เรียก REST ตรงจึงยังไม่กระทบ แต่ถ้าจะเขียน LLM logic ฝั่ง Python ต้องเลือก
@@ -177,9 +197,9 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 
 | ค่า | ตั้งที่ไหน | ค่า placeholder ปัจจุบัน |
 |---|---|---|
-| `OMNISSIAH_API_KEY` | env บนเครื่อง + header `X-API-Key` ใน n8n 5 nodes (เพิ่ม `Assess Severity`) | `REPLACE_WITH_SHARED_SECRET` |
-| Gemini API key | header `x-goog-api-key` ใน node `Gemini Generate` | `Gemini-API` |
-| Base URL ของ API | 5 HTTP Request nodes ใน n8n | `http://host.docker.internal:8000` (สมมติว่า n8n อยู่ใน Docker) |
+| `OMNISSIAH_API_KEY` | env บนเครื่อง + header `X-API-Key` ใน `n8n-workflow.json` 5 nodes + `n8n-workflow-reactive-ingest.json` 1 node (`Ingest Alert`) | `REPLACE_WITH_SHARED_SECRET` |
+| Gemini API key | header `x-goog-api-key` ใน node `Gemini Generate` (มีแค่ใน `n8n-workflow.json`) | `Gemini-API` |
+| Base URL ของ API | 5 HTTP Request nodes ใน `n8n-workflow.json` + 1 ใน `n8n-workflow-reactive-ingest.json` | `http://host.docker.internal:8000` (สมมติว่า n8n อยู่ใน Docker) |
 
 รายละเอียดวิธีตั้งอยู่ใน `USAGE.md` §2–§4
 

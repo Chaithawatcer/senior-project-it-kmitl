@@ -1,8 +1,10 @@
-# วิธีใช้งาน Omnissiah (สถานะปัจจุบัน)
+# วิธีใช้งาน Omnissiah (สถานะปัจจุบัน) (docker start omnissiah-n8n)
 
-> ขอบเขตที่ทำได้ตอนนี้: **Pipeline 1 เชิงรับ** แบบ manual trigger + mock Wazuh alert (Windows AD Event 4625/4740 — ตรง scope proposal)
+> ขอบเขตที่ทำได้ตอนนี้: **Pipeline 1 เชิงรับ** ครบทั้งเส้น demo (manual trigger + mock Wazuh alert →
+> NCSC/Escalation → RAG playbook) **บวก webhook รับ alert จริงแยกต่างหาก** (`/alerts/ingest` — ดู §3.5)
+> ที่ทำ Normalize → Central Schema + dedup + t0/t1 + สกัด observables ตาม ARCHITECTURE.md §2 ขั้น 1-3
 > รวม **NCSC Categorisation + Escalation Matrix** แล้ว (deterministic, ดู HANDOFF.md §4.6)
-> ยังไม่มี: Pipeline 2 (RSS), CTI enrichment (VirusTotal/AbuseIPDB — `cti_verdict` เป็น `"unknown"` เสมอตอนนี้), Teams/LINE notification, Review Gate
+> ยังไม่มี: Pipeline 2 (RSS), CTI enrichment (VirusTotal/AbuseIPDB — `cti_verdict` เป็น `"unknown"` เสมอตอนนี้), Teams/LINE notification, Review Gate, การเชื่อม `/alerts/ingest` เข้ากับ workflow สร้าง playbook เต็มเส้น (ยังเป็น 2 workflow แยกกัน — ดู §3.5)
 
 ---
 
@@ -14,11 +16,13 @@
 <repo root>/
 ├─ requirements.txt          Python dependencies
 ├─ ARCHITECTURE.md           สถาปัตยกรรมเป้าหมาย 6 layers
-├─ n8n-workflow.json         workflow สำหรับ import เข้า n8n
+├─ n8n-workflow.json         workflow เต็มเส้น (mock trigger → NCSC → RAG playbook)
+├─ n8n-workflow-reactive-ingest.json  workflow แยก — Webhook จริง → /alerts/ingest ⭐ ใหม่
 └─ Project/
+   ├─ central_schema.py      Central Schema: normalize + dedup + observable extraction ⭐ ใหม่
    ├─ 01_ingest.py           อ่าน playbooks/**/*.md → chunk → embed → ChromaDB (รองรับ subfolder)
    ├─ gen_mitre_kb.py        ดึง MITRE Mitigations ทางการเข้า KB (ต้องดาวน์โหลด STIX data ก่อน)
-   ├─ api.py                 FastAPI 6 endpoints ให้ n8n เรียก
+   ├─ api.py                 FastAPI 8 endpoints ให้ n8n เรียก
    ├─ playbooks/*.md         Knowledge Base ส่วน threat playbook (3 ไฟล์, doc_type=playbook)
    ├─ playbooks/defense/     KB ส่วนเอกสารป้องกันรายเทคนิค (doc_type=defense)
    ├─ playbooks/mitre/       KB ส่วน MITRE Mitigations ทางการ (doc_type=mitre, สร้างโดย gen_mitre_kb.py)
@@ -115,6 +119,19 @@ python -m uvicorn api:app --host 0.0.0.0 --port 8000
 3. node `Gemini Generate` → แก้ header `x-goog-api-key` จาก `Gemini-API` เป็น API key จริงจาก Google AI Studio
 4. กด **Execute Workflow** (Manual Trigger)
 
+### ขั้นที่ 3.5 — Reactive Ingest Workflow (webhook จริง) ⭐ ใหม่
+
+`n8n-workflow-reactive-ingest.json` เป็น workflow **แยกต่างหาก** จาก `n8n-workflow.json` — ทำเฉพาะ
+ARCHITECTURE.md §2 ขั้นที่ 1-3 (รับ alert ผ่าน webhook จริง → normalize เป็น Central Schema + dedup +
+t0/t1 → สกัด observables) **ยังไม่เชื่อมต่อกับขั้นที่ 4 เป็นต้นไป** (NCSC, RAG playbook ฯลฯ) โดยตั้งใจ —
+สองไฟล์นี้จะรวมเป็นเส้นเดียวในอนาคตเมื่อ Central Schema ถูกเชื่อมเข้ากับส่วนที่เหลือ
+
+1. Import `n8n-workflow-reactive-ingest.json` เข้า n8n เหมือนขั้นที่ 3
+2. แก้ header `X-API-Key` ใน node `Ingest Alert` ให้ตรงกับที่ตั้งไว้
+3. **Activate** workflow (toggle มุมขวาบนของหน้า editor — ต่างจาก `n8n-workflow.json` ที่ใช้ Manual Trigger กดรันเอง เพราะอันนี้ใช้ Webhook node ต้อง activate ก่อน webhook ถึงจะรับ request ได้จริง)
+4. ยิง POST ไปที่ URL ที่ node `Webhook` แสดง (ปกติ `http://localhost:5678/webhook/alerts/ingest`) ด้วย mock Wazuh alert (ดูตัวอย่าง JSON ใน `Project/central_schema.py`'s `AlertIngestRequest` หรือใน HANDOFF.md)
+5. ยิงซ้ำด้วย payload เดิมอีกครั้ง — ต้องได้ `"status": "dedup_hit"` คืน `case_id` เดิม เป็นการยืนยันว่า dedup ทำงาน
+
 ---
 
 ## 4. เรื่อง network ระหว่าง n8n กับ API
@@ -163,12 +180,18 @@ Manual Trigger
 
 | Method | Path | หน้าที่ |
 |---|---|---|
+| POST | `/alerts/ingest` | ⭐ ใหม่ — [1] รับ SIEM alert ผ่าน webhook [2] normalize → Central Schema + dedup + t0/t1 [3] สกัด observables |
+| GET | `/alerts/{case_id}` | ⭐ ใหม่ — ดึง case ที่ ingest ไว้ด้วย case_id |
 | GET | `/template/sections` | คืนโครง 3 phase (containment/eradication/recovery) พร้อม fill_instruction |
-| POST | `/assess/severity` | ⭐ ใหม่ — NCSC Categorisation (C2–C6) + Escalation Matrix แบบ deterministic |
+| POST | `/assess/severity` | NCSC Categorisation (C2–C6) + Escalation Matrix แบบ deterministic |
 | POST | `/retrieve` | hybrid retrieval — กรอง `phase` (+ `doc_types` ถ้าระบุ) ที่ Chroma แล้วกรอง `technique_ids` ที่ Python |
 | POST | `/playbooks/assemble` | ประกอบ markdown + แปะธง DRAFT / Coverage Warning / NCSC-Escalation table |
 | GET | `/playbooks/lookup` | เช็ค dedup ด้วย `technique_ids` + `threat_name` |
 | POST | `/playbooks` | บันทึก playbook (รวม `ncsc_category`, `escalation_tier`) |
+
+> `/alerts/ingest` กับ `/playbooks/lookup` เป็น dedup คนละชั้นกัน — `/alerts/ingest` กัน SIEM alert ซ้ำ
+> ตั้งแต่ต้นทาง (ก่อนรู้ด้วยซ้ำว่าจะสร้าง playbook ไหม) ส่วน `/playbooks/lookup` กัน generate playbook
+> ซ้ำสำหรับ technique ชุดเดียวกัน — คนละ dedup_key คนละ store กัน (`_CASES` vs `_STORE`)
 
 วิธีทดสอบที่ง่ายที่สุดและใช้ได้ทุกระบบ: เปิด http://localhost:8000/docs แล้วกด **Authorize** / ใส่ header `X-API-Key` ผ่าน Swagger UI
 
@@ -185,6 +208,18 @@ curl -X POST http://localhost:8000/retrieve \
 curl -X POST http://localhost:8000/assess/severity \
   -H "X-API-Key: $OMNISSIAH_API_KEY" -H "Content-Type: application/json" \
   -d '{"account_privilege":"domain_admin","attack_success":false,"distinct_accounts":1,"cti_verdict":"unknown"}'
+
+curl -X POST http://localhost:8000/alerts/ingest \
+  -H "X-API-Key: $OMNISSIAH_API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "rule": {"level": 10, "description": "Multiple Windows Logon Failures", "id": "60122",
+      "mitre": {"id": ["T1110.001"], "technique": ["Brute Force: Password Guessing"]}},
+    "agent": {"name": "DC01"},
+    "data": {"win": {"system": {"eventID": "4625"},
+      "eventdata": {"targetUserName": "admin_somchai", "ipAddress": "185.15.58.22", "logonType": "3", "subStatus": "0xC000006A"}}},
+    "full_log": "test alert"
+  }'
+# ยิงซ้ำด้วย body เดิม -> ต้องได้ "status": "dedup_hit" คืน case_id เดิม
 ```
 
 ```powershell
@@ -256,6 +291,7 @@ doc_type: playbook
 - `_STORE` ใน `api.py` เป็น dict ในหน่วยความจำ — **restart แล้วข้อมูลหายหมด** ยังไม่ได้ต่อฐานข้อมูลจริง
 - `fallback_used` hardcode เป็น `False` ตลอด
 - Coverage tier (full / partial / none) ตาม ARCHITECTURE.md §4 ยังไม่ได้ implement เต็มรูปแบบ — ตอนนี้มีแค่ `missing_techniques` แบบ binary (แต่มี `doc_type` filter ให้ต่อยอดแล้ว)
-- ยังไม่มี webhook endpoint รับ alert จริง — ใช้ Mock node ใน n8n แทน
+- `POST /alerts/ingest` (webhook จริง, §3.5) กับ workflow สร้าง playbook เต็มเส้น (`n8n-workflow.json`, ยังใช้ Mock node) **ยังเป็นคนละ workflow แยกกัน** — ยังไม่เชื่อมเป็นเส้นเดียว
+- `_CASES` ใน `api.py` (store ของ `/alerts/ingest`) เป็น dict ในหน่วยความจำเหมือน `_STORE` — restart แล้วหายหมด และยังไม่มี unique index กัน race condition ตอนสอง request เข้าพร้อมกัน
 - `cti_verdict` เป็น `"unknown"` เสมอ — CTI enrichment (VirusTotal/AbuseIPDB) ยังไม่ implement ทำให้ NCSC category บางเคสยังไม่แม่นเท่าที่ควร (ดู HANDOFF.md §4.6)
 - `account_privilege` มาจาก lookup table hardcode ใน n8n (`ACCOUNT_PRIVILEGE_LOOKUP`) — ยังไม่ได้ถาม AD group membership จริง
