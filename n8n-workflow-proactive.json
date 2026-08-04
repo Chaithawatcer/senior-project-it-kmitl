@@ -1,6 +1,73 @@
 {
-  "name": "Omnissiah — Proactive Intel Playbook (Manual + Mock Feed)",
+  "name": "Omnissiah — Proactive Intel Playbook (MISP + Mock Fallback)",
   "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000018",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        2144,
+        -448
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://REPLACE_WITH_MISP_BASE_URL/events/restSearch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "REPLACE_WITH_MISP_API_KEY"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\"returnFormat\": \"json\", \"limit\": 10, \"page\": 1, \"published\": true, \"timestamp\": \"30d\", \"includeContext\": true, \"includeEventTags\": true, \"tags\": [\"%T1003%\", \"%T1006%\", \"%T1021%\", \"%T1036.010%\", \"%T1068%\", \"%T1069%\", \"%T1071.004%\", \"%T1078.002%\", \"%T1087%\", \"%T1098%\", \"%T1110.003%\", \"%T1134.005%\", \"%T1136.002%\", \"%T1187%\", \"%T1207%\", \"%T1222%\", \"%T1482%\", \"%T1484%\", \"%T1486%\", \"%T1489%\", \"%T1490%\", \"%T1531%\", \"%T1550%\", \"%T1552.006%\", \"%T1556%\", \"%T1557%\", \"%T1558%\", \"%T1606.002%\", \"%T1615%\", \"%T1649%\", \"%T1685%\"]}) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000019",
+      "name": "Fetch MISP Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2368,
+        -448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// แปลง MISP restSearch response -> รูปแบบเดียวกับ Mock CTI Feed { source, title, link, published, content }\n// สำคัญ: backend /intel/ingest สกัด IoC/CVE/T-code/facts จาก field `content` เอง (regex ฝั่ง server)\n// จึงต้อง \"แบน\" attribute + galaxy(ATT&CK) + tag ของ MISP event ลงเป็นข้อความใน content ให้ regex เดิมจับได้\nconst MISP_BASE_URL = 'REPLACE_WITH_MISP_BASE_URL'; // ต้องตรงกับ node Fetch MISP Events (ห้ามมี / ปิดท้าย)\nconst events = $input.first().json.response ?? [];\n\nconst out = [];\nfor (const wrap of events) {\n  const ev = wrap.Event ?? wrap;\n\n  // รวม attribute ทั้งที่แขวนกับ event ตรง ๆ และที่อยู่ใน MISP Object\n  const attrs = [...(ev.Attribute ?? [])];\n  for (const obj of (ev.Object ?? [])) attrs.push(...(obj.Attribute ?? []));\n\n  const lines = [];\n  if (ev.info) lines.push(ev.info);\n\n  // IoC: ใส่ค่าดิบลงตรง ๆ ให้ regex backend จับ (ip-src/ip-dst, domain/hostname, md5/sha1/sha256, vulnerability=CVE)\n  for (const a of attrs) {\n    if (['link', 'comment', 'text', 'other', 'attachment'].includes(a.type)) continue;\n    const note = a.comment ? ` (${a.comment})` : '';\n    lines.push(`${a.category}/${a.type}: ${a.value}${note}`);\n  }\n\n  // MITRE ATT&CK galaxy -> external_id = T-code (backend สกัดด้วย \\bT\\d{4}(\\.\\d{3})?\\b)\n  for (const g of (ev.Galaxy ?? [])) {\n    for (const cl of (g.GalaxyCluster ?? [])) {\n      const ext = Array.isArray(cl.meta?.external_id)\n        ? cl.meta.external_id.join(' ')\n        : (cl.meta?.external_id ?? '');\n      lines.push(`ATT&CK: ${cl.value ?? ''} ${ext}`.trim());\n    }\n  }\n\n  // Tag ระดับ event (เผื่อ T-code/CVE ถูกแปะเป็น tag แทน galaxy)\n  for (const t of (ev.Tag ?? [])) lines.push(`Tag: ${t.name}`);\n\n  const publishedIso = ev.publish_timestamp\n    ? new Date(Number(ev.publish_timestamp) * 1000).toISOString()\n    : (ev.date ? `${ev.date}T00:00:00Z` : null);\n\n  out.push({\n    json: {\n      source: `MISP — สกมช/NCSA${ev.Orgc?.name ? ' (' + ev.Orgc.name + ')' : ''}`,\n      title: ev.info || `MISP Event ${ev.id}`,\n      link: `${MISP_BASE_URL}/events/view/${ev.id}`,\n      published: publishedIso,\n      content: lines.join('\\n'),\n      misp_event_id: ev.id,\n      misp_uuid: ev.uuid,\n    }\n  });\n}\n\n// ไม่มี event เข้าเกณฑ์ -> คืน array ว่าง ให้ flow จบเงียบ ๆ ไม่สร้าง playbook เปล่า\nreturn out;\n"
+      },
+      "id": "a0000000-0000-4000-8000-000000000020",
+      "name": "Normalize MISP Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        -448
+      ]
+    },
     {
       "parameters": {},
       "id": "a0000000-0000-4000-8000-000000000001",
@@ -531,6 +598,39 @@
         [
           {
             "node": "Prepare Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch MISP Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch MISP Events": {
+      "main": [
+        [
+          {
+            "node": "Normalize MISP Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize MISP Events": {
+      "main": [
+        [
+          {
+            "node": "Ingest Intel",
             "type": "main",
             "index": 0
           }

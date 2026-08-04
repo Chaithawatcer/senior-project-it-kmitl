@@ -1,7 +1,7 @@
 # HANDOFF — Omnissiah (AI-Driven SOC Copilot)
 
 เอกสารส่งต่องาน สำหรับ **เพื่อนในทีมที่มาทำต่อ** และ **AI assistant ที่รับ context ใหม่**
-อัปเดตล่าสุด: 2026-07-24 (เพิ่ม §0.3 — Pipeline 2 เชิงรุก ขั้น 1-3 + Notification messages บนบรานช์ `proactive-pipeline-1-2-3`)
+อัปเดตล่าสุด: 2026-08-05 (เพิ่ม §0.4 — ต่อ MISP จริง (สกมช./NCSA) เข้า proactive workflow แทน Mock feed บนบรานช์ `proactive-pipeline-1-2-3`)
 
 > ถ้าคุณเป็น AI assistant: อ่านไฟล์นี้ให้จบก่อนแก้โค้ด ส่วน §4 (ข้อตกลงที่ห้ามพัง) คือสิ่งที่แก้ผิดแล้วระบบพังเงียบ ๆ โดยไม่ error
 
@@ -96,6 +96,48 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 - **ยังไม่ส่งเข้า Teams/LINE จริง** — `/notify/messages` คืนตัวข้อความพร้อมส่ง ต่อ channel node ได้เลยโดยไม่แก้ logic
 
 **ทดสอบแล้ว (HTTP ตรง ทุก assert ผ่าน):** ingest ข่าว Hacker News → `created` สกัด IoC ครบ (2 IP defanged→refang, 1 SHA256, 1 domain, CVE-2025-21298, 3 techniques) + facts 3 ประโยค verbatim ทั้งหมด → ยิงข่าว CISA เรื่องเดียวกัน → `dedup_hit` → retrieve เจอ 5 chunks ทุก phase (เฉพาะ defense/mitre) → assemble ได้ Proactive Defense Playbook + IoC table defanged → notify ได้ 2 ข้อความถูกต้อง — **ยังไม่ได้รันผ่าน n8n UI จริง** (ต้อง import + ใส่ Gemini key แล้วกด Execute — ดู USAGE.md §3.6)
+
+---
+
+## 0.4 บรานช์ `proactive-pipeline-1-2-3` — ต่อ MISP จริง (สกมช./NCSA) เข้า proactive workflow ⭐ ล่าสุด
+
+เปลี่ยนแหล่งข่าวฝั่งเชิงรุกจาก **Mock CTI Feed** → **ดึง event จริงจาก MISP ของ สกมช.** (ได้ account มาแล้ว)
+โดย **ไม่แตะ backend เลย** — แก้เฉพาะ `n8n-workflow-proactive.json`
+
+### (ก) ทำอะไร
+
+| ไฟล์ | ทำอะไร |
+|---|---|
+| `n8n-workflow-proactive.json` (แก้ 17→20 node) | เพิ่มเส้นทางจริง **Schedule Trigger (ทุก 6 ชม.) → Fetch MISP Events → Normalize MISP Events** เข้า `Ingest Intel` node เดิม · **เก็บ Mock ไว้เป็น fallback**: เส้น `Manual Trigger → Mock CTI Feed` ยังอยู่ ทั้งสองเส้นวิ่งเข้า `Ingest Intel` ตัวเดียวกัน · เปลี่ยนชื่อ workflow เป็น "…(MISP + Mock Fallback)" |
+
+- **Fetch MISP Events** (HTTP Request): `POST {MISP}/events/restSearch` — body `{ returnFormat:json, limit:10, page:1, published:true, timestamp:"30d", includeContext:true, includeEventTags:true, tags:[...] }` · header `Authorization: <key>` + `Accept: application/json`
+- **Normalize MISP Events** (Code): แปลง `response[]` ของ MISP → รูปแบบเดียวกับ Mock (`{ source, title, link, published, content }`) ทีละ event
+
+### (ข) การตัดสินใจสำคัญที่ต้องรู้
+
+- **ทำไมไม่แก้ backend:** `/intel/ingest` สกัด IoC/CVE/T-code/facts จาก field `content` เองด้วย regex (§0.3) — ดังนั้น Normalize แค่ **"แบน" MISP event ลงเป็นข้อความใน `content`**: เอา `Attribute` (รวมที่อยู่ใน `Object`) + `Galaxy.GalaxyCluster.meta.external_id` (= T-code ของ ATT&CK) + `Tag` มาต่อเป็นบรรทัด แล้ว regex เดิมจับต่อได้ทันที ไม่ต้องเพิ่ม field/endpoint
+- **MISP auth key เป็น read-only** — workflow แค่ **อ่าน** (restSearch) ไม่เขียนกลับ · ค่า key ใส่ใน header `Authorization` **ดิบ ๆ ไม่ต้องเติม `Bearer`** (ต่างจาก API ทั่วไป)
+- **ตัวกรอง `tags` = ★★★ AD-specific 51 technique** จาก `ad-attack-surface-attack-v19.md` (section "Technique ที่มีเฉพาะใน AD") ยุบเป็น **31 wildcard** (`%T1558%` ครอบ Golden/Silver/Kerberoast/AS-REP ฯลฯ) · `%` = SQL-LIKE wildcard ของ MISP tag search จับ galaxy tag เช่น `misp-galaxy:mitre-attack-pattern="Kerberoasting - T1558.003"` · แก้/เพิ่มได้ที่ node *Fetch MISP Events* → Body JSON → `tags` (เติม ★★ ได้ถ้าอยากกว้างขึ้น แต่จะเริ่มจับ event Windows ทั่วไปที่ไม่เกี่ยว AD ปนมา)
+
+### (ค) จุดที่ยังเปราะ / ต้องตัดสินใจ (ยังไม่แก้)
+
+1. **`Limit 1 Story` (maxItems:1) ทำ event หลุดถาวรเมื่อ MISP คืนหลาย event ต่างเรื่อง** — ถ้ารอบเดียวมี 2 event **คนละ dedup_key**: ทั้งคู่ได้ `created` เก็บลง `_INTEL` แต่ Limit ตัดเหลือ gen แค่ **event แรก (ตามลำดับ default ของ MISP — ไม่ได้ sort ตาม threat_level/วันที่)** · รอบถัดไปตัวที่ 2 กลายเป็น `dedup_hit` → โดน `Filter created` ตัด → **ไม่มีวันถูก gen** · ตอน Mock ไม่เจอเพราะจงใจให้ 2 ข่าวเป็นเรื่องเดียวกัน (1 created + 1 dedup_hit) · **ทางแก้ที่คุยไว้:** (A) เพิ่ม Sort ก่อน Limit เอาตัวร้ายแรงสุด หรือ (B) เอา `Limit 1 Story` ออกให้ gen ทุก event ใหม่ในรอบเดียว — **ยังไม่ได้เลือก**
+2. **domain IoC regex รับ TLD จำกัด** (`.com/.net/.top/…` — ดู `_DOMAIN_RE`) → domain `.th`/`.go.th` **ไม่ถูกสกัด** · IP/hash/CVE/T-code ครบปกติ (ข้อจำกัดเดิมของ backend §0.3 ไม่ใช่จาก MISP)
+3. **ตัวกรองพึ่งการที่ MISP สกมช. แปะ ATT&CK galaxy tag บน event** — event ที่เขาไม่แปะ tag technique จะไม่ถูกดึง (แม้เนื้อหาเกี่ยว AD) · ถ้าลองแล้วได้ 0 event → เปลี่ยน/เสริมด้วย `eventinfo` keyword ("Active Directory", "Kerberos") · นี่คือเหตุผลที่ยังเก็บ Mock fallback ไว้
+
+### (ง) สถานะการทดสอบ
+
+**ยังไม่ได้รันจริง** — ติดที่ (1) ยังไม่มี MISP base URL + key จริงของ สกมช. (2) ยังไม่มี n8n instance รันอยู่ (3) backend/chroma_db ต้อง start เอง · **validate แล้ว:** JSON ถูกต้อง 20 node, 2 เส้นทางวิ่งเข้า `Ingest Intel`, `tags` = 31 wildcard ครบ
+
+### (จ) ค่าที่ต้องตั้งเองก่อนรัน (เพิ่มจาก §8)
+
+| Placeholder | ที่อยู่ | เอามาจากไหน |
+|---|---|---|
+| `REPLACE_WITH_MISP_BASE_URL` | **2 จุดต้องตรงกัน**: node *Fetch MISP Events* (url) + ตัวแปร `MISP_BASE_URL` ใน *Normalize MISP Events* | URL ฐานของ MISP สกมช. (ห้ามมี `/` ปิดท้าย) |
+| `REPLACE_WITH_MISP_API_KEY` | header `Authorization` ของ *Fetch MISP Events* | หน้า MISP → Administration/Global Actions → Add auth key (ติ๊ก **Read only**) |
+| `REPLACE_WITH_SHARED_SECRET` | ทุก node ที่เรียก backend (เดิม §8) | ตั้งเองให้ n8n = env `OMNISSIAH_API_KEY` ของ `api.py` |
+
+> ทดสอบ key เร็ว ๆ: `curl -s -H "Authorization: <KEY>" -H "Accept: application/json" https://<MISP>/servers/getVersion`
 
 ---
 

@@ -272,6 +272,19 @@
     },
     {
       "parameters": {
+        "jsCode": "// Export playbook markdown -> ไฟล์ .md (binary) สำหรับดาวน์โหลด/เขียนลงดิสก์/แนบส่งต่อ\nconst agg = $('Aggregate Sections').first().json;\nconst markdown = $('Assemble Playbook').first().json.markdown ?? '';\n\n// front-matter metadata สรุปหัวเคส\nconst now = new Date().toISOString();\nconst frontMatter = [\n  '---',\n  `case_id: ${agg.case_id}`,\n  `threat_name: ${agg.threat_name}`,\n  `severity: ${agg.severity}`,\n  `technique_ids: [${(agg.technique_ids ?? []).join(', ')}]`,\n  `ncsc_category: ${agg.ncsc?.ncsc_category ?? '-'}`,\n  `escalation_tier: ${agg.ncsc?.escalation_tier ?? '-'}`,\n  `generated_at: ${now}`,\n  '---',\n  ''\n].join('\n');\n\nconst doc = `${frontMatter}\n# Incident Response Playbook — ${agg.threat_name}\n\n${markdown}\n`;\n\n// ตั้งชื่อไฟล์: <case_id>-<threat>.md (sanitize อักขระต้องห้าม)\nconst safe = (s) => String(s ?? '').replace(/[^w.-]+/g, '_').replace(/^_+|_+$/g, '');\nconst fileName = `${safe(agg.case_id)}-${safe(agg.threat_name)}.md` || 'playbook.md';\n\nconst binary = await this.helpers.prepareBinaryData(\n  Buffer.from(doc, 'utf-8'),\n  fileName,\n  'text/markdown'\n);\n\nreturn [{\n  json: { case_id: agg.case_id, threat_name: agg.threat_name, fileName, bytes: binary.fileSize },\n  binary: { data: binary }\n}];"
+      },
+      "id": "e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+      "name": "Export Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5072,
+        -272
+      ]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "http://host.docker.internal:8000/assess/severity",
         "sendHeaders": true,
@@ -481,6 +494,17 @@
         [
           {
             "node": "Assess Severity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Draft": {
+      "main": [
+        [
+          {
+            "node": "Export Markdown",
             "type": "main",
             "index": 0
           }
