@@ -1,7 +1,7 @@
 # HANDOFF — Omnissiah (AI-Driven SOC Copilot)
 
 เอกสารส่งต่องาน สำหรับ **เพื่อนในทีมที่มาทำต่อ** และ **AI assistant ที่รับ context ใหม่**
-อัปเดตล่าสุด: 2026-08-05 (เพิ่ม §0.4 — ต่อ MISP จริง (สกมช./NCSA) เข้า proactive workflow แทน Mock feed บนบรานช์ `proactive-pipeline-1-2-3`)
+อัปเดตล่าสุด: 2026-08-11 (เพิ่ม §0.5 — sync กับ MISP integration ของเพื่อน, แก้ chroma_db เสีย, งานวิจัยเสริมนอก repo บนบรานช์ `proactive-pipeline-1-2-3`)
 
 > ถ้าคุณเป็น AI assistant: อ่านไฟล์นี้ให้จบก่อนแก้โค้ด ส่วน §4 (ข้อตกลงที่ห้ามพัง) คือสิ่งที่แก้ผิดแล้วระบบพังเงียบ ๆ โดยไม่ error
 
@@ -141,6 +141,57 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 
 ---
 
+## 0.5 รอบล่าสุด — sync กับ MISP ของเพื่อน + แก้ chroma_db เสีย + งานวิจัยเสริมนอก repo ⭐ ล่าสุด
+
+### (ก) sync git + แก้ conflict node export
+
+pull commit `aa87dd6` (defense KB 6 ไฟล์) + `8d11cc6` "Use Real MISP" ของเพื่อนเข้าเครื่องแล้ว —
+ระหว่าง pull เจอ **conflict จริง**: ทั้งเราและเพื่อนต่างเพิ่ม node export markdown คนละชื่อในจุดเดียวกัน
+ของ `n8n-workflow.json` (`Export Report (.md)` ของเรา vs `Export Markdown` ของเพื่อน) — แก้โดย:
+- `n8n-workflow.json` (เชิงรับ): **ใช้ `Export Markdown` ของเพื่อน** (ดีกว่า — ใช้
+  `this.helpers.prepareBinaryData()` ที่ถูกต้องตาม n8n API + ใส่ frontmatter เคสให้ด้วย) — node เดิม
+  ของเราถูก **stash ไว้** (`git stash list` → `"local Export Report node before pulling teammate MISP
+  integration"`) กู้คืนได้ถ้าต้องการ ไม่ได้ลบทิ้ง
+- `n8n-workflow-proactive.json` (เชิงรุก): **ไม่ชนกัน** เพื่อนแก้ต้นทาง (MISP nodes) เราแก้ปลายทาง
+  (Export Report) — ใส่ `Export Report (.md)` ของเรากลับเข้าไปหลัง pull เรียบร้อย (21 node ตอนนี้)
+
+### (ข) ⚠️ MISP API key หลุดในแชท — ต้อง revoke
+
+เพื่อนส่ง MISP API key จริงผ่านข้อความแชท (ไม่ใช่ผ่านช่องทางปลอดภัย) — **ถือว่า key ตัวนั้นรั่วแล้วตาม
+กฎ §… (ดู CLAUDE.md §6)** ต้อง **revoke + สร้างใหม่จากหน้า MISP ก่อนใช้งานจริง** — key ตัวใหม่ต้องใส่
+**ตรงในช่อง header ของ n8n เท่านั้น** (ไม่ใช่ไฟล์/แชท): node `Fetch MISP Events` → header `Authorization`
+(ดิบ ๆ ไม่ต้องเติม `Bearer`) — **ยังไม่ได้ทดสอบ MISP integration จริงเลยสักครั้ง** (`REPLACE_WITH_MISP_BASE_URL`
+ยังเป็น placeholder อยู่ในไฟล์ ต้องถามเพื่อนหา URL จริง — ไม่มีบันทึกไว้ที่ไหนในโปรเจกต์)
+
+### (ค) แก้ `chroma_db/` เสีย (`chromadb.errors.NotFoundError`)
+
+เจอ error `Collection [UUID] does not exist` ตอนเปิด uvicorn — วินิจฉัยแล้วพบว่า `chroma.sqlite3`
+มี catalog อ้างอิง collection UUID ที่ไม่มีโฟลเดอร์ข้อมูลจริงเหลืออยู่ (สะสมจากการรัน `01_ingest.py`
+ซ้ำหลายรอบที่ orphan folder ค้างไว้) — **แก้โดยลบ `chroma_db/` ทิ้งทั้งโฟลเดอร์แล้วรัน `01_ingest.py` ใหม่**
+(ปลอดภัย เพราะเป็นแค่ index ที่ generate จาก `.md` ใน `playbooks/` ไม่ใช่ source of truth)
+
+**ผลลัพธ์หลัง rebuild: 201 chunks จาก 17 ไฟล์** (เพิ่มจาก 147 chunks/11 ไฟล์เดิม — เป็นครั้งแรกที่ 6 ไฟล์
+defense ใหม่ของเพื่อนถูก ingest จริง เพราะก่อนหน้านี้ pull เข้ามาแล้วแต่ไม่มีใคร ingest ใหม่)
+
+⚠️ **เจอปัญหาเสริมระหว่าง rebuild**: `01_ingest.py` เขียน emoji (`🚀` ฯลฯ) ลง console ไม่ได้บน
+Windows/Git Bash บางเครื่อง (`UnicodeEncodeError` จาก codepage `cp874`) — แก้ด้วย
+`PYTHONIOENCODING=utf-8 python 01_ingest.py` (ปัญหานี้เกิดเฉพาะตอนรัน ingest script เขียน console
+เท่านั้น **ไม่กระทบ uvicorn**)
+
+### (ง) งานวิจัยเสริมนอก repo (ไม่ commit เข้า git — เก็บที่ `D:\senior project\` root)
+
+| ไฟล์ | มีอะไร |
+|---|---|
+| `AD-Attack-Coverage-Expansion/ATTACK-DETAILS.md` | วิเคราะห์ AD attack technique ครบ 22 กลุ่ม (9 ที่มีใน KB + 13 ที่ยังไม่มี) พร้อมกลไก/เงื่อนไข/ผลกระทบ/สัญญาณตรวจจับ |
+| `AD-Attack-Coverage-Expansion/sample-playbooks/` | 11 ไฟล์ defense ตัวอย่างสำหรับเทคนิคที่ยังไม่มีใน KB (Kerberos Delegation Abuse, DCShadow, GPO Abuse, Zerologon/noPac, PetitPotam, GPP cpassword, PrintNightmare, AD Recon/BloodHound, Lateral Movement อื่น) — ยังไม่ได้เอาเข้า KB จริง |
+| `OMNISSIAH-PROJECT-PLAN-COMPLETE.md` | แผนโปรเจกต์ฉบับสมบูรณ์ (อดีต+อนาคต) ยึดตาม `PLAN.md`/proposal อาจารย์ 30 สัปดาห์ — sync ขึ้น Notion แล้ว |
+
+**พบจากการเทียบกับ proposal:** ขั้นดำเนินงาน 1-6 เสร็จเร็วกว่าแผน (milestone สัปดาห์ 12 ผ่านแล้ว) แต่
+**ขั้น 7 (Human Review Gate) และขั้น 8 (วัดผล TTR/NCSC accuracy/IoC precision-recall) ยังไม่เริ่มเลย**
+ทั้งที่เป็น 2 ส่วนที่กรรมการจะถามหาตัวเลขจริงตอนสอบ — ดูรายละเอียดเต็มใน `OMNISSIAH-PROJECT-PLAN-COMPLETE.md` §3
+
+---
+
 ## 1. อ่านอะไรก่อน
 
 | ลำดับ | ไฟล์ | ได้อะไร |
@@ -154,7 +205,7 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 | 7 | `Project/gen_mitre_kb.py` | ดึง MITRE Mitigations ทางการเข้า KB |
 | 8 | `n8n-workflow.json` | orchestration เต็มเส้น 15 nodes (mock trigger → ingest → CTI → NCSC → RAG playbook) |
 | 9 | `n8n-workflow-reactive-ingest.json` | webhook จริงสำหรับ Pipeline 1 ขั้น 1-3 เท่านั้น (ใหม่ §0.1) |
-| 10 | `n8n-workflow-proactive.json` | Pipeline 2 เชิงรุกเต็มเส้น 17 nodes (mock feed → dedup → RAG → notify) (ใหม่ §0.3) |
+| 10 | `n8n-workflow-proactive.json` | Pipeline 2 เชิงรุกเต็มเส้น 21 nodes (MISP จริง + mock fallback → dedup → RAG → notify → export) (§0.3+§0.4+§0.5) |
 
 ---
 
@@ -168,25 +219,33 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 | [4] RAG Core | 🟢 ทำแล้ว + ขยาย | ChromaDB + hybrid retrieval + วนทีละ phase ครบ + รองรับ filter `doc_type` แล้ว (ยังไม่ได้ทำ tiering primary/secondary เต็มรูปแบบ) |
 | [5] Output & Notification | 🟡 เกือบครบ | ประกอบ markdown ได้ (CTI + NCSC/Escalation + IoC table) + **ข้อความแจ้งผู้บริหาร/ฝ่ายไอทีแล้ว** (`/notify/messages`, §0.3) — เหลือแค่ต่อ channel จริง (Teams/LINE) |
 | [6] Human Review Gate | 🔴 ยังไม่ทำ | มีแค่ field `status: "draft"` ไม่มีกลไกอนุมัติ |
-| Pipeline 2 (เชิงรุก) | 🟡 ขั้น 1-3 + ปลายเส้นแล้ว | mock feed → IntelRecord + dedup ข้ามแหล่งข่าว + facts/IoCs → RAG (defense+mitre) → Proactive Playbook + notify (§0.3) — เหลือ: RSS/Schedule จริง, LLM technique mapping (ขั้น 4), coverage tier (ขั้น 5) |
+| Pipeline 2 (เชิงรุก) | 🟡 ขั้น 1-3 + ปลายเส้นแล้ว | mock feed → IntelRecord + dedup ข้ามแหล่งข่าว + facts/IoCs → RAG (defense+mitre) → Proactive Playbook + notify (§0.3) — เพิ่มเส้นทาง **MISP จริงของ สกมช.** ขนานกับ mock แล้ว (§0.4) **แต่ยังไม่เคยทดสอบจริงเลยสักครั้ง** (ติด key รั่ว+ต้อง revoke, ยังไม่รู้ base URL จริง — ดู §0.5(ข)) — เหลือ: LLM technique mapping (ขั้น 4), coverage tier (ขั้น 5) |
 
-**สรุป:** Pipeline 1 (เชิงรับ) ทำงานครบเส้นตั้งแต่รับ alert → normalize → CTI → NCSC → RAG → playbook draft และ**ทดสอบจบเส้นผ่าน n8n จริงสำเร็จแล้ว** (§0.2) สิ่งที่เหลือใหญ่ที่สุด 2 อย่างคือ **Notification + Human Review Gate** และ **Pipeline 2 ทั้งเส้น**
+**สรุป:** Pipeline 1 (เชิงรับ) ทำงานครบเส้นตั้งแต่รับ alert → normalize → CTI → NCSC → RAG → playbook draft และ**ทดสอบจบเส้นผ่าน n8n จริงสำเร็จแล้ว** (§0.2) — Pipeline 2 (เชิงรุก) ทำงานครบเส้นด้วย mock ยืนยันผ่าน n8n จริงแล้วเช่นกัน แต่**เส้นทาง MISP จริงยังไม่เคยพิสูจน์ว่ารันได้จริง** สิ่งที่เหลือใหญ่ที่สุด 2 อย่างคือ **Human Review Gate** (ยังไม่เริ่มเลย) และ **การวัดผลตามตัวชี้วัด proposal** (TTR/NCSC accuracy/IoC precision-recall — ยังไม่เริ่มอย่างเป็นทางการ ดู `OMNISSIAH-PROJECT-PLAN-COMPLETE.md` §3 นอก repo)
 
 ---
 
 ## 3. Knowledge Base ที่มีอยู่
 
-**11 ไฟล์ · 147 chunks · ครบ 3 phase ทุกไฟล์ (containment/eradication/recovery)** — ครบ 3 ส่วนตาม proposal §3.2 แล้ว
+**17 ไฟล์ · 201 chunks · ครบ 3 phase ทุกไฟล์ (containment/eradication/recovery)** — ครบ 3 ส่วนตาม proposal §3.2 แล้ว (นับใหม่หลัง rebuild `chroma_db/` §0.5(ค) — ตัวเลขนี้คือของจริงล่าสุด)
 
 | doc_type | ไฟล์ | threat_name / technique | ที่มา |
 |---|---|---|---|
 | `playbook` | `01_brute_force.md` | Brute Force — T1110.001, T1110.003, T1078 | ทีมเขียนเอง |
 | `playbook` | `02_credential_dumping.md` | Credential Dumping — T1003.001, T1078, T1550.002 | ทีมเขียนเอง |
 | `playbook` | `03_rdp_bruteforce.md` | RDP Brute Force — T1110.001, T1021.001, T1078 | ทีมเขียนเอง |
-| `defense` | `defense/T1110_brute_force_defense.md` | เทคนิค T1110/.001/.003 ล้วน ไม่ผูก threat scenario | ทีมเขียนเอง (ตัวอย่าง — ควรเพิ่มอีกตาม technique ที่ KB ขยาย) |
+| `defense` | `defense/T1110_brute_force_defense.md` (+ ขยายเพิ่ม) | T1110/.001/.003 | ทีมเขียนเอง |
+| `defense` | `defense/T1003_os_credential_dumping_defense.md` | T1003 (.001-.006) รวม DCSync | เพื่อนเพิ่ม 30 ก.ค. |
+| `defense` | `defense/T1556_modify_authentication_process_defense.md` | Skeleton Key, Password Filter DLL | เพื่อนเพิ่ม |
+| `defense` | `defense/T1557_Adversary_in_the_Middle.md` | LLMNR/NBT-NS Poisoning + NTLM Relay | เพื่อนเพิ่ม |
+| `defense` | `defense/T1558_steal_or_forge_kerberos_tickets_defense.md` | Golden/Silver Ticket, Kerberoasting, AS-REP Roasting | เพื่อนเพิ่ม |
+| `defense` | `defense/T1606_forge_web_credentials_defense.md` | Golden SAML | เพื่อนเพิ่ม |
+| `defense` | `defense/T1649_forge_authentication_certificates_defense.md` | AD CS Abuse (ESC1-8) | เพื่อนเพิ่ม |
 | `mitre` | `mitre/t1110_mitigations.md` และอีก 6 ไฟล์ (T1110.001, T1110.003, T1078, T1003.001, T1550.002, T1021.001) | Mitigations ทางการต่อ technique | `gen_mitre_kb.py` ผ่าน `mitreattack-python` (offline, ดาวน์โหลด STIX ครั้งเดียว) |
 
 ครอบคลุมแค่ธีม **credential attack บน Active Directory** — นอกขอบเขตนี้ระบบจะคืน `chunks: []` แล้วแปะธง ⚠️ ซึ่งเป็นพฤติกรรมที่ถูกต้อง ไม่ใช่บั๊ก
+
+**ยังครอบคลุม AD attack surface แค่ ~40-45%** (วิเคราะห์ไว้ครบใน `D:\senior project\AD-Attack-Coverage-Expansion\ATTACK-DETAILS.md` นอก repo — มีไฟล์ตัวอย่างพร้อมเอาเข้า KB จริง 11 ไฟล์ รอตัดสินใจลำดับความสำคัญ)
 
 **หมายเหตุ mitre docs:** เนื้อหาเดียวกันถูก duplicate ลงทั้ง 3 phase โดยตั้งใจ (MITRE Mitigations ไม่ได้ผูก phase ใด phase หนึ่งโดยธรรมชาติ ต่าง จาก threat playbook) เหตุผลเต็มอยู่ในคอมเมนต์ท้าย `gen_mitre_kb.py` — ควรทบทวนอีกทีตอนทำ tiering เต็มรูปแบบ (§6 ข้อ 3)
 
@@ -270,6 +329,8 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 | MITRE mitigation chunk ซ้ำ 3 phase | ดู §3 หมายเหตุ | เก็บพื้นที่มากกว่าที่จำเป็น 3 เท่า — ยอมรับได้ตอนนี้ |
 | CTI enrichment เรียก API ภายนอกแบบ sync | `/cti/enrich` ยิง VirusTotal + AbuseIPDB ตรง ๆ (timeout 10s/ตัว) — ถ้า API ล่ม/ช้า จะหน่วงทั้ง workflow, free tier มี rate limit (VT: 4 req/นาที) | demo ถี่ ๆ อาจโดน 429 — node ตั้ง retry 3 ครั้งไว้แล้วแต่ควรรู้ไว้ |
 | `account_privilege` มาจาก hardcode lookup table | ยังไม่ถาม AD จริง (`ACCOUNT_PRIVILEGE_LOOKUP` ใน `central_schema.py`) | ใช้ได้แค่กับ mock/demo ไม่ใช่ของจริง |
+| `chroma_db/` เคยเสีย 1 ครั้งแล้ว (`NotFoundError`, §0.5(ค)) | orphan collection UUID ใน catalog สะสมจากการรัน `01_ingest.py` ซ้ำ | ถ้าเจอ error นี้อีก: หยุด uvicorn → ลบ `chroma_db/` ทั้งโฟลเดอร์ → `PYTHONIOENCODING=utf-8 python 01_ingest.py` |
+| MISP integration ยังไม่เคยทดสอบจริงเลย (§0.4, §0.5(ข)) | ติด key รั่ว+ต้อง revoke ก่อน และไม่รู้ base URL จริง | ห้ามใส่ key/URL เดา ๆ ต้องถามเพื่อนให้ชัดก่อน |
 
 ---
 
@@ -278,12 +339,16 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 1. ~~รวม Central Schema เข้ากับ workflow สร้าง playbook เต็มเส้น~~ ✅ **เสร็จแล้ว (§0.2 ก)**
 2. ~~CTI enrichment (VirusTotal/AbuseIPDB)~~ ✅ **เสร็จแล้ว (§0.2 ข)**
 3. ~~Pipeline 2 ขั้น 1-3 + ปลายเส้น playbook/notification (mock)~~ ✅ **เสร็จแล้ว (§0.3)**
-4. **รัน `n8n-workflow-proactive.json` ผ่าน n8n UI จริง 1 รอบ** — logic ทดสอบผ่าน HTTP หมดแล้ว เหลือยืนยัน wiring ใน n8n (import + ใส่ key + Execute ตาม USAGE.md §3.6)
-5. **Pipeline 2 ให้เป็นของจริง** — แทน Mock CTI Feed ด้วย Schedule Trigger + RSS Read, ขั้น 4 (LLM map พฤติกรรม→technique สำหรับข่าวที่ไม่เขียน T-code), ขั้น 5 (coverage tier full/partial/none)
-6. **Notification channel + Review Gate** — ต่อ `/notify/messages` เข้า Teams/LINE จริง (⚠️ LINE Notify ปิดบริการแล้ว มี.ค. 2025 — ใช้ Messaging API หรือ Teams แทน) + กลไก Draft → Approved
-7. **Coverage tier เต็มรูปแบบ** — ใช้ `doc_type` filter ที่เพิ่มไว้ + เปิด `distances` ใน `include=[...]` แล้วหา threshold จากการทดลอง **อย่าตั้งค่าลอย ๆ**
-8. **Persist `_STORE` / `_CASES` / `_INTEL`** — SQLite ก็พอ ทั้งสาม store ยังเป็น in-memory dict + ควรรวม dedup หลายชั้นเป็นระบบเดียว (§5)
-9. **แทน `ACCOUNT_PRIVILEGE_LOOKUP` ด้วย AD group membership query จริง** — ตอนต่อ AD จริงแล้ว
+4. ~~รัน `n8n-workflow-proactive.json` ผ่าน n8n UI จริง 1 รอบ~~ ✅ **เสร็จแล้ว (mock path เขียวหมด — ยืนยันจาก execute จริง)**
+5. **ทดสอบ MISP integration จริง** ⭐ **เร่งด่วนสุดตอนนี้** — ต้อง (ก) เพื่อน revoke key เก่าที่หลุดในแชท + สร้างใหม่ (ข) หา MISP base URL จริง (ค) ใส่ทั้งคู่ตรงใน n8n UI (ง) รัน Execute step ทีละ node ก่อนรันเต็มเส้น (ดู §0.5(ข))
+6. **Human Review Gate** — กลไก Draft → Approved จริง ยังไม่ได้แตะเลย (ตามข้อ 7 ของวิธีดำเนินงาน proposal)
+7. **เริ่มวัดผลตามตัวชี้วัด proposal** — TTR (t5-t0/t6-t0), ความแม่นยำ NCSC, IoC precision/recall, Coverage Warning test — proposal ต้องการตัวเลขจริงตอนสอบ (สัปดาห์ 21-23 ตามแผน) ยังไม่เริ่มอย่างเป็นทางการเลย
+8. **ขยาย KB ตามลำดับที่วิเคราะห์ไว้แล้ว** — Kerberos Delegation Abuse, AD Discovery/BloodHound ก่อน (ไฟล์ตัวอย่างพร้อมแล้วใน `AD-Attack-Coverage-Expansion/sample-playbooks/` นอก repo)
+9. **Pipeline 2 ให้เป็นของจริงครบ** — ขั้น 4 (LLM map พฤติกรรม→technique สำหรับข่าวที่ไม่เขียน T-code ตรง ๆ), ขั้น 5 (coverage tier full/partial/none)
+10. **Notification channel จริง** — ต่อ `/notify/messages` เข้า Teams/LINE จริง (⚠️ LINE Notify ปิดบริการแล้ว มี.ค. 2025 — ใช้ Messaging API หรือ Teams แทน)
+11. **Coverage tier เต็มรูปแบบ** — ใช้ `doc_type` filter ที่เพิ่มไว้ + เปิด `distances` ใน `include=[...]` แล้วหา threshold จากการทดลอง **อย่าตั้งค่าลอย ๆ**
+12. **Persist `_STORE` / `_CASES` / `_INTEL`** — SQLite ก็พอ ทั้งสาม store ยังเป็น in-memory dict + ควรรวม dedup หลายชั้นเป็นระบบเดียว (§5)
+13. **แทน `ACCOUNT_PRIVILEGE_LOOKUP` ด้วย AD group membership query จริง** — ตอนต่อ AD จริงแล้ว
 
 ---
 
@@ -306,6 +371,8 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 | `OMNISSIAH_API_KEY` | env บนเครื่อง + header `X-API-Key` ใน `n8n-workflow.json` **7 nodes** (`Ingest Alert`, `CTI Enrichment`, `Assess Severity`, `Get Sections`, `Retrieve Chunks`, `Assemble Playbook`, `Save Draft`) + `n8n-workflow-proactive.json` **6 nodes** (`Ingest Intel`, `Get Sections`, `Retrieve Chunks`, `Assemble Playbook`, `Save Draft`, `Notify Messages`) + `n8n-workflow-reactive-ingest.json` 1 node | `REPLACE_WITH_SHARED_SECRET` |
 | `VIRUSTOTAL_API_KEY` / `ABUSEIPDB_API_KEY` | env บนเครื่องที่รัน uvicorn เท่านั้น (api.py อ่านผ่าน `os.getenv`) — ไม่ตั้งก็รันได้ แต่ CTI จะคืน `unknown` | (ว่าง) |
 | Gemini API key | header `x-goog-api-key` ใน node `Gemini Generate` (มีทั้งใน `n8n-workflow.json` และ `n8n-workflow-proactive.json`) — ⚠️ **คนละ header name กับ node อื่น ห้าม copy ไปวางที่ node อื่น** | `Gemini-API` |
+| **MISP API key** ⚠️ | header `Authorization` ใน node `Fetch MISP Events` (`n8n-workflow-proactive.json` เท่านั้น) — **ดิบ ๆ ไม่ต้องเติม `Bearer`** — **key เดิมหลุดในแชททีมแล้ว ต้อง revoke ก่อนใช้** | `REPLACE_WITH_MISP_API_KEY` |
+| **MISP base URL** | 2 จุดต้องตรงกัน: url ของ node `Fetch MISP Events` + ตัวแปร `MISP_BASE_URL` ในโค้ดของ node `Normalize MISP Events` (ห้ามมี `/` ปิดท้าย) — **ยังไม่รู้ค่าจริง ต้องถามเพื่อน** | `REPLACE_WITH_MISP_BASE_URL` |
 | Base URL ของ API | 7 HTTP Request nodes ใน `n8n-workflow.json` + 6 ใน `n8n-workflow-proactive.json` + 1 ใน `n8n-workflow-reactive-ingest.json` | `http://host.docker.internal:8000` (สมมติว่า n8n อยู่ใน Docker) |
 
 รายละเอียดวิธีตั้งอยู่ใน `USAGE.md` §2–§4

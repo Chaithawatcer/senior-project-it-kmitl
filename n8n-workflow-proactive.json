@@ -424,6 +424,19 @@
         5728,
         -272
       ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// รวม playbook + ข้อความแจ้งผู้บริหาร/ฝ่ายไอที เป็นไฟล์ .md เดียว ให้ดาวน์โหลดตรงจาก\n// ผลลัพธ์ execution นี้เลย — ไม่ต้องเอา JSON ไปแปลงที่เครื่องมืออื่นต่อ\nconst playbook = $('Assemble Playbook').first().json.markdown;\nconst notif = $json; // จาก Prepare Notifications: { playbook_id, intel_id, executive_message, it_message }\n\nconst report = [\n  playbook,\n  '',\n  '---',\n  '',\n  '## 📢 ข้อความแจ้งผู้บริหาร',\n  '',\n  '```',\n  notif.executive_message,\n  '```',\n  '',\n  '## 🔧 ข้อความแจ้งฝ่ายไอที / SOC',\n  '',\n  '```',\n  notif.it_message,\n  '```',\n  ''\n].join('\\n');\n\nconst fileName = `playbook_${notif.intel_id}.md`;\nconst buffer = Buffer.from(report, 'utf-8');\n\nreturn [{\n  json: { ...notif, report_filename: fileName },\n  binary: {\n    data: {\n      data: buffer.toString('base64'),\n      mimeType: 'text/markdown',\n      fileName\n    }\n  }\n}];"
+      },
+      "id": "e0000000-0000-4000-8000-000000000exq",
+      "name": "Export Report (.md)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5952,
+        -272
+      ]
     }
   ],
   "pinData": {},
@@ -631,6 +644,17 @@
         [
           {
             "node": "Ingest Intel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notifications": {
+      "main": [
+        [
+          {
+            "node": "Export Report (.md)",
             "type": "main",
             "index": 0
           }
