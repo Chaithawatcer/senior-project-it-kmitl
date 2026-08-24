@@ -9,9 +9,13 @@ import ipaddress
 import json
 import os
 import re
+import sqlite3
+import threading
+import time
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import chromadb
@@ -34,6 +38,8 @@ API_KEY = os.getenv("OMNISSIAH_API_KEY", "REPLACE_WITH_SHARED_SECRET")
 # ⚠️ ห้าม hardcode ค่าจริงตรงนี้หรือที่ไหนในโค้ดเด็ดขาด — ตั้งเป็น env var ก่อนรัน uvicorn เท่านั้น
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
+# store ถาวรว่า MISP event (uuid) ไหนเจน playbook ไปแล้ว — ค้างข้าม restart (ต่าง _INTEL ที่เป็น in-memory)
+PROCESSED_DB_PATH = os.getenv("OMNISSIAH_STATE_DB", str(Path(__file__).parent / "state.db"))
 
 # ⚠️ ต้องเป็นตัวเดียวกับตอน ingest เป๊ะๆ (all-MiniLM-L6-v2)
 #    ถ้าเปลี่ยน model retrieval จะพังเงียบๆ — คืน chunk มั่วโดยไม่ error
@@ -49,6 +55,7 @@ async def lifespan(app: FastAPI):
     state["collection"] = client.get_collection(
         name=COLLECTION_NAME, embedding_function=EMBEDDING_FN
     )
+    _init_processed_db()
     yield
     state.clear()
 
@@ -109,6 +116,10 @@ def get_case(case_id: str):
 # mock phase ใช้ T-code ที่ปรากฏในข่าวตรง ๆ และใช้ missing_techniques เดิมเป็น coverage flag
 
 _INTEL: dict[str, dict] = {}  # dedup_key -> IntelRecord (dict) — in-memory เหมือน _CASES
+_UUID2KEY: dict[str, str] = {}  # misp_uuid -> dedup_key — ให้ mark-processed กลับมาปั๊ก playbook_generated ได้ตอนจบ
+_RESERVED: dict[str, float] = {}  # dedup_key -> reserved_at(epoch) — lease กัน 2 execution ซ้อนหยิบ event เดียวกัน
+_RESERVE_LOCK = threading.Lock()  # ทำ check-and-reserve ให้ atomic (FastAPI เรียกจาก threadpool)
+_RESERVE_TTL = 900  # วินาที: ปลด lease อัตโนมัติถ้ารอบที่จอง fail/ค้าง เพื่อให้ event กลับมา retry ได้ (ต้อง > เวลาที่ 1 รอบใช้จน mark-processed)
 
 
 @app.post("/intel/ingest", dependencies=[Depends(verify_key)])
@@ -122,14 +133,44 @@ def ingest_intel(req: IntelIngestRequest):
     """
     raw = req.model_dump()
     intel = build_intel_record(raw)
+    # echo uuid ของ MISP event กลับ (มากับ extra="allow") ให้ n8n พกไปถึง Mark Processed ตอนจบ
+    # already_processed: เคยเจน playbook ให้ event นี้แล้วยัง (ค้างข้าม restart) — n8n Filter ใช้ skip
+    misp_uuid = raw.get("misp_uuid") or ""
+    already_processed = _is_processed(misp_uuid)
 
-    existing = _INTEL.get(intel.dedup_key)
-    if existing:
-        return {"status": "dedup_hit", "intel": existing}
+    # จำ mapping uuid -> dedup_key ไว้ ให้ /intel/mark-processed กลับมาปั๊ก playbook_generated ตอนจบ
+    if misp_uuid:
+        _UUID2KEY[misp_uuid] = intel.dedup_key
 
-    intel_dict = intel.model_dump()
-    _INTEL[intel.dedup_key] = intel_dict
-    return {"status": "created", "intel": intel_dict}
+    key = intel.dedup_key
+    # check-and-reserve แบบ atomic — กัน 2 execution ที่ยิงซ้อนกันหยิบ event เดียวกันไปเจนพร้อมกัน
+    with _RESERVE_LOCK:
+        existing = _INTEL.get(key)
+        # dedup_hit (drop) เฉพาะเมื่อ "เจน playbook สำเร็จแล้วจริง" — เช็ก 2 สัญญาณ:
+        #   already_processed              = event นี้ (uuid) ทำเสร็จแล้ว (persistent, ทนต่อ restart)
+        #   existing.playbook_generated    = ข่าวเรื่องนี้ (dedup_key) มี playbook แล้ว (กันซ้ำข้ามแหล่งข่าว)
+        # ⚠️ ห้าม dedup_hit เพียงเพราะ "เคย ingest" — รอบก่อนอาจ fail กลางคัน (ยังไม่ถึง mark-processed)
+        #     ถ้า drop ตรงนี้ event จะหลุดถาวรทั้งที่ playbook ไม่เคยออก (บั๊กเดิม)
+        if already_processed or (existing and existing.get("playbook_generated")):
+            return {"status": "dedup_hit", "intel": existing or intel.model_dump(),
+                    "misp_uuid": misp_uuid, "already_processed": already_processed}
+
+        # กัน run ซ้อน: ถ้ามีรอบอื่นจอง key นี้อยู่ และ lease ยังไม่หมดอายุ → รอบนี้ถอย (in_progress)
+        # Filter รับเฉพาะ status=="created" → in_progress จึงถูก drop เงียบ ๆ (รอบซ้อนกลายเป็น no-op)
+        now = datetime.now(timezone.utc).timestamp()
+        reserved_at = _RESERVED.get(key)
+        if reserved_at is not None and (now - reserved_at) < _RESERVE_TTL:
+            return {"status": "in_progress", "intel": existing or intel.model_dump(),
+                    "misp_uuid": misp_uuid, "already_processed": already_processed}
+
+        # ยังไม่สำเร็จ + ไม่มีใครจองอยู่ (หรือ lease หมดอายุ = รอบก่อน fail) → จองแล้วปล่อยผ่านให้ (ลอง) เจน
+        # คืน record เดิมถ้ามี เพื่อคง intel_id เสถียรระหว่าง retry
+        _RESERVED[key] = now
+        intel_dict = existing or intel.model_dump()
+        _INTEL[key] = intel_dict
+
+    return {"status": "created", "intel": intel_dict,
+            "misp_uuid": misp_uuid, "already_processed": already_processed}
 
 
 @app.get("/intel/{intel_id}", dependencies=[Depends(verify_key)])
@@ -138,6 +179,102 @@ def get_intel(intel_id: str):
         if intel["intel_id"] == intel_id:
             return intel
     raise HTTPException(status_code=404, detail="intel not found")
+
+
+@app.post("/intel/reset", dependencies=[Depends(verify_key)])
+def reset_intel():
+    """
+    DEV/DEMO เท่านั้น — ล้าง in-memory intel store เพื่อให้รัน workflow (proactive) ซ้ำได้
+    โดยไม่ต้องรีสตาร์ท process ข่าวชุดเดิมจะกลับไปได้ status=created อีกครั้ง
+    ไม่แตะ _CASES/playbook — จงใจให้ scope แคบ เฉพาะสายข่าวกรองเชิงรุก
+    ⚠️ อย่าเปิดใช้บน production: endpoint นี้ทำให้ dedup ข้ามแหล่งข่าวใช้ไม่ได้ถ้าถูกเรียกพร่ำเพรื่อ
+    """
+    cleared = len(_INTEL)
+    _INTEL.clear()
+    _UUID2KEY.clear()
+    with _RESERVE_LOCK:
+        _RESERVED.clear()
+    with _DB_LOCK, _db_conn() as conn:
+        cleared_db = conn.execute("DELETE FROM processed_events").rowcount
+    return {"status": "reset", "cleared": cleared, "cleared_processed_events": cleared_db}
+
+
+# ---------------------------------------------------------------- persistent processed-events store (SQLite)
+# ตอบคำถาม "MISP event (uuid) นี้เจน playbook ไปแล้วยัง" แบบค้างข้าม restart — ฝั่ง n8n loop เช็คทีละ event
+# ใช้ event_uuid (unique ทั่วโลก ถาวร) เป็น key ไม่ใช่ numeric id ที่ผูกกับ instance
+
+_DB_LOCK = threading.Lock()  # sqlite3 ถูกเรียกจาก FastAPI threadpool — กัน write ชนกัน
+
+
+def _db_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(PROCESSED_DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_processed_db() -> None:
+    with _DB_LOCK, _db_conn() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS processed_events ("
+            "event_uuid TEXT PRIMARY KEY, "
+            "playbook_id TEXT, "
+            "threat_name TEXT, "
+            "generated_at TEXT NOT NULL)"
+        )
+
+
+def _is_processed(event_uuid: str) -> bool:
+    if not event_uuid:
+        return False
+    with _db_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM processed_events WHERE event_uuid = ?", (event_uuid,)
+        ).fetchone()
+    return row is not None
+
+
+def _mark_processed(event_uuid: str, playbook_id: str, threat_name: str) -> bool:
+    """คืน True ถ้าเพิ่งบันทึกใหม่, False ถ้ามีอยู่แล้ว (INSERT OR IGNORE กันเจนซ้ำแม้ race)"""
+    if not event_uuid:
+        return False
+    with _DB_LOCK, _db_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO processed_events "
+            "(event_uuid, playbook_id, threat_name, generated_at) VALUES (?, ?, ?, ?)",
+            (event_uuid, playbook_id, threat_name, datetime.now(timezone.utc).isoformat()),
+        )
+        return cur.rowcount > 0
+
+
+class IsProcessedRequest(BaseModel):
+    event_uuid: str = ""
+
+
+@app.post("/intel/is-processed", dependencies=[Depends(verify_key)])
+def intel_is_processed(req: IsProcessedRequest):
+    """เช็คว่า MISP event นี้เจน playbook แล้วหรือยัง — n8n กรองก่อนเข้า loop เจน (skip ตัวที่ทำวันนี้แล้ว)"""
+    return {"event_uuid": req.event_uuid, "processed": _is_processed(req.event_uuid.strip())}
+
+
+class MarkProcessedRequest(BaseModel):
+    event_uuid: str = ""
+    playbook_id: str = ""
+    threat_name: str = ""
+
+
+@app.post("/intel/mark-processed", dependencies=[Depends(verify_key)])
+def intel_mark_processed(req: MarkProcessedRequest):
+    """บันทึกว่า event นี้เจน playbook แล้ว (เรียกหลัง Save Draft) — event ไม่มี uuid (mock) จะ no-op"""
+    event_uuid = req.event_uuid.strip()
+    inserted = _mark_processed(event_uuid, req.playbook_id, req.threat_name)
+    # ปั๊ก "ข่าวเรื่องนี้เจน playbook แล้ว" ที่ระดับ dedup_key ด้วย — กัน ingest รอบหน้าเจนซ้ำข้ามแหล่งข่าว
+    # (คู่กับ already_processed ที่กันซ้ำระดับ uuid) — ตรงนี้คือสัญญาณ "เสร็จจริง" ที่แทนที่ dedup แบบ "เคย ingest"
+    key = _UUID2KEY.get(event_uuid)
+    if key and key in _INTEL:
+        _INTEL[key]["playbook_generated"] = True
+    with _RESERVE_LOCK:
+        _RESERVED.pop(key, None)  # เสร็จแล้วปลด lease (ถึงไม่ปลด playbook_generated ก็กันซ้ำอยู่ดี)
+    return {"event_uuid": req.event_uuid, "marked": inserted}
 
 
 # ---------------------------------------------------------------- CTI enrichment (ARCHITECTURE.md ขั้นที่ 4)
@@ -239,6 +376,133 @@ def cti_enrich(req: CtiEnrichRequest):
         "virustotal": vt,
         "abuseipdb": abuse,
         "reason": f"vt_malicious={vt_malicious}, abuseipdb_score={abuse_score}, is_tor={is_tor}",
+    }
+
+
+# ---------------------------------------------------------------- VT hash → ATT&CK technique enrichment
+# กู้ MITRE technique จาก sample เมื่อ MISP event ไม่มี Galaxy/T-code (เช่น NCSA feed ที่มีแต่ IoC)
+# ดึงจาก VT behaviour_summary (field .attack_techniques — key เป็น T-code อยู่แล้ว)
+# ผลลัพธ์เอาไปเติม intel.mitre_techniques ให้ node Retrieve Chunks มี technique ป้อน RAG
+
+_TCODE_RE = re.compile(r"T\d{4}(?:\.\d{3})?")  # ตรงกับ _TECHNIQUE_RE ใน central_schema
+_VT_HASH_CACHE: dict[str, list[str]] = {}  # hash(lower) -> technique_ids ที่เคยดึง (in-memory ตลอดอายุ process)
+
+# global rate limiter — คุม VT ≤ 4 call/นาที "ทั้ง process" (ไม่ใช่แค่ต่อ event) เพราะ n8n loop
+# หลาย event เรียง /cti/enrich-hash ต่อกัน cap-4-ต่อ-event อย่างเดียวยังรวมกันทะลุ 4/นาทีได้
+_VT_MAX_PER_MIN = int(os.getenv("VT_MAX_PER_MIN", "4"))
+_VT_CALL_TIMES: list[float] = []
+_VT_RATE_LOCK = threading.Lock()
+
+
+def _vt_rate_limit_wait() -> None:
+    """sleep เท่าที่จำเป็นให้ VT live call อยู่ใต้ _VT_MAX_PER_MIN ต่อหน้าต่าง 60 วิ (นับเฉพาะ call จริง)"""
+    with _VT_RATE_LOCK:
+        now = time.monotonic()
+        while _VT_CALL_TIMES and _VT_CALL_TIMES[0] <= now - 60:
+            _VT_CALL_TIMES.pop(0)
+        if len(_VT_CALL_TIMES) >= _VT_MAX_PER_MIN:
+            sleep_for = 60 - (now - _VT_CALL_TIMES[0]) + 0.05
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            now = time.monotonic()
+            while _VT_CALL_TIMES and _VT_CALL_TIMES[0] <= now - 60:
+                _VT_CALL_TIMES.pop(0)
+        _VT_CALL_TIMES.append(time.monotonic())
+
+
+def _vt_hash_techniques(file_hash: str) -> dict:
+    """
+    ยิง VT /files/{hash}/behaviour_summary แล้วสกัด key ของ attack_techniques (= T-code)
+    คืน {"techniques": [...], "status": ok|not_found|rate_limited|no_key|error|http_xxx}
+    ⚠️ นับเป็น 1 request/hash ต่อ quota VT (free = 4/นาที, 500/วัน) — มี global throttle คุมให้แล้ว
+    """
+    if not VIRUSTOTAL_API_KEY:
+        return {"techniques": [], "status": "no_key"}
+    _vt_rate_limit_wait()  # กัน 4/นาที ทั้ง process ก่อนยิงจริง
+    req = urllib.request.Request(
+        f"https://www.virustotal.com/api/v3/files/{file_hash}/behaviour_summary",
+        headers={"x-apikey": VIRUSTOTAL_API_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"techniques": [], "status": "not_found"}  # VT ไม่รู้จัก hash นี้ (ยังกิน quota)
+        if e.code == 429:
+            return {"techniques": [], "status": "rate_limited"}  # ชน 4/นาที → ให้ caller หยุดยิงต่อ
+        return {"techniques": [], "status": f"http_{e.code}"}
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        return {"techniques": [], "status": "error", "error": str(e)}
+
+    attack = (data.get("data") or {}).get("attack_techniques") or {}
+    techniques = sorted({t for t in attack.keys() if _TCODE_RE.fullmatch(t)})
+    return {"techniques": techniques, "status": "ok"}
+
+
+class CtiHashEnrichRequest(BaseModel):
+    hashes: list[str] = []
+    existing_techniques: list[str] = []
+    max_hashes: int = 4  # cap VT call สด/รอบ — 4 พอดีเพดาน free tier (4/นาที) ไม่ต้อง sleep
+
+
+@app.post("/cti/enrich-hash", dependencies=[Depends(verify_key)])
+def cti_enrich_hash(req: CtiHashEnrichRequest):
+    """
+    กู้ MITRE technique จาก hash ด้วย VT behaviour_summary — ใช้ตอน MISP event ไม่มี Galaxy/T-code
+    กัน rate limit 3 ชั้น:
+      [cap]   ยิงสดไม่เกิน max_hashes ตัว/รอบ (default 4 = เพดาน free tier ต่อ 1 นาที)
+      [cache] hash ที่เคยดึงแล้วใช้ผลเดิม ไม่กิน quota + ไม่นับ cap (in-memory ตลอดอายุ process)
+      [stop]  เจอ 429 เมื่อไหร่ หยุดยิงที่เหลือทันที คืนเท่าที่ได้
+    คืน technique_ids = existing ∪ ที่ดึงได้ใหม่ (ให้ n8n เอาไปทับ intel.mitre_techniques)
+    """
+    existing = {t for t in req.existing_techniques if _TCODE_RE.fullmatch(t)}
+
+    # dedupe hash (lower, คงลำดับ) — event เดียวมัก sample ตระกูลเดียวกันซ้ำ ๆ ไม่ต้องยิงซ้ำ
+    seen: set[str] = set()
+    uniq_hashes: list[str] = []
+    for h in req.hashes:
+        hl = (h or "").strip().lower()
+        if hl and hl not in seen:
+            seen.add(hl)
+            uniq_hashes.append(hl)
+
+    added: set[str] = set()
+    per_hash: list[dict] = []
+    live_calls = 0
+    rate_limited = False
+    cap = max(0, req.max_hashes)
+
+    for hl in uniq_hashes:
+        if hl in _VT_HASH_CACHE:
+            techs = _VT_HASH_CACHE[hl]
+            added.update(techs)
+            per_hash.append({"hash": hl, "techniques": techs, "status": "cache"})
+            continue
+        if rate_limited or live_calls >= cap:
+            per_hash.append({"hash": hl, "techniques": [], "status": "skipped_cap"})
+            continue
+
+        res = _vt_hash_techniques(hl)
+        live_calls += 1
+        if res["status"] == "rate_limited":
+            rate_limited = True
+            per_hash.append({"hash": hl, "techniques": [], "status": "rate_limited"})
+            continue
+        if res["status"] == "ok":
+            _VT_HASH_CACHE[hl] = res["techniques"]  # cache เฉพาะที่ยิงสำเร็จ
+        added.update(res["techniques"])
+        per_hash.append({"hash": hl, "techniques": res["techniques"], "status": res["status"]})
+
+    merged = sorted(existing | added)
+    return {
+        "technique_ids": merged,
+        "added_techniques": sorted(added - existing),
+        "existing_techniques": sorted(existing),
+        "total_hashes": len(uniq_hashes),
+        "live_calls": live_calls,
+        "rate_limited": rate_limited,
+        "per_hash": per_hash,
     }
 
 
