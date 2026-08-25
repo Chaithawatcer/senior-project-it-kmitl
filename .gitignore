@@ -30,6 +30,10 @@ env/
 # Secrets
 .env
 
+# Runtime state — สร้างเองตอนรัน pipeline บนเครื่องแต่ละคน ไม่ commit
+Project/state.db
+*.db
+
 # Omnissiah — regenerable / generated artifacts (ไม่ต้อง push)
 # แต่ละคนรัน 01_ingest.py สร้างเองบนเครื่องตัวเอง
 chroma_db/

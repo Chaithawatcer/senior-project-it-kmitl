@@ -6,8 +6,8 @@
         "rule": {
           "interval": [
             {
-              "field": "hours",
-              "hoursInterval": 6
+              "field": "minutes",
+              "minutesInterval": 5
             }
           ]
         }
@@ -41,7 +41,7 @@
         "method": "POST",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\"returnFormat\": \"json\", \"limit\": 10, \"page\": 1, \"published\": true, \"timestamp\": \"30d\", \"includeContext\": true, \"includeEventTags\": true, \"tags\": [\"%T1003%\", \"%T1006%\", \"%T1021%\", \"%T1036.010%\", \"%T1068%\", \"%T1069%\", \"%T1071.004%\", \"%T1078.002%\", \"%T1087%\", \"%T1098%\", \"%T1110.003%\", \"%T1134.005%\", \"%T1136.002%\", \"%T1187%\", \"%T1207%\", \"%T1222%\", \"%T1482%\", \"%T1484%\", \"%T1486%\", \"%T1489%\", \"%T1490%\", \"%T1531%\", \"%T1550%\", \"%T1552.006%\", \"%T1556%\", \"%T1557%\", \"%T1558%\", \"%T1606.002%\", \"%T1615%\", \"%T1649%\", \"%T1685%\"]}) }}"
+        "jsonBody": "={{ JSON.stringify({\"returnFormat\": \"json\", \"limit\": 50, \"page\": 1, \"published\": true, \"timestamp\": \"24h\", \"includeContext\": true, \"includeEventTags\": true, \"tags\": [\"%T1003%\", \"%T1006%\", \"%T1021%\", \"%T1036.010%\", \"%T1068%\", \"%T1069%\", \"%T1071.004%\", \"%T1078.002%\", \"%T1087%\", \"%T1098%\", \"%T1110.003%\", \"%T1134.005%\", \"%T1136.002%\", \"%T1187%\", \"%T1207%\", \"%T1222%\", \"%T1482%\", \"%T1484%\", \"%T1486%\", \"%T1489%\", \"%T1490%\", \"%T1531%\", \"%T1550%\", \"%T1552.006%\", \"%T1556%\", \"%T1557%\", \"%T1558%\", \"%T1606.002%\", \"%T1615%\", \"%T1649%\", \"%T1685%\"]}) }}"
       },
       "id": "a0000000-0000-4000-8000-000000000019",
       "name": "Fetch MISP Events",
@@ -57,7 +57,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// แปลง MISP restSearch response -> รูปแบบเดียวกับ Mock CTI Feed { source, title, link, published, content }\n// สำคัญ: backend /intel/ingest สกัด IoC/CVE/T-code/facts จาก field `content` เอง (regex ฝั่ง server)\n// จึงต้อง \"แบน\" attribute + galaxy(ATT&CK) + tag ของ MISP event ลงเป็นข้อความใน content ให้ regex เดิมจับได้\nconst MISP_BASE_URL = 'REPLACE_WITH_MISP_BASE_URL'; // ต้องตรงกับ node Fetch MISP Events (ห้ามมี / ปิดท้าย)\nconst events = $input.first().json.response ?? [];\n\nconst out = [];\nfor (const wrap of events) {\n  const ev = wrap.Event ?? wrap;\n\n  // รวม attribute ทั้งที่แขวนกับ event ตรง ๆ และที่อยู่ใน MISP Object\n  const attrs = [...(ev.Attribute ?? [])];\n  for (const obj of (ev.Object ?? [])) attrs.push(...(obj.Attribute ?? []));\n\n  const lines = [];\n  if (ev.info) lines.push(ev.info);\n\n  // IoC: ใส่ค่าดิบลงตรง ๆ ให้ regex backend จับ (ip-src/ip-dst, domain/hostname, md5/sha1/sha256, vulnerability=CVE)\n  for (const a of attrs) {\n    if (['link', 'comment', 'text', 'other', 'attachment'].includes(a.type)) continue;\n    const note = a.comment ? ` (${a.comment})` : '';\n    lines.push(`${a.category}/${a.type}: ${a.value}${note}`);\n  }\n\n  // MITRE ATT&CK galaxy -> external_id = T-code (backend สกัดด้วย \\bT\\d{4}(\\.\\d{3})?\\b)\n  for (const g of (ev.Galaxy ?? [])) {\n    for (const cl of (g.GalaxyCluster ?? [])) {\n      const ext = Array.isArray(cl.meta?.external_id)\n        ? cl.meta.external_id.join(' ')\n        : (cl.meta?.external_id ?? '');\n      lines.push(`ATT&CK: ${cl.value ?? ''} ${ext}`.trim());\n    }\n  }\n\n  // Tag ระดับ event (เผื่อ T-code/CVE ถูกแปะเป็น tag แทน galaxy)\n  for (const t of (ev.Tag ?? [])) lines.push(`Tag: ${t.name}`);\n\n  const publishedIso = ev.publish_timestamp\n    ? new Date(Number(ev.publish_timestamp) * 1000).toISOString()\n    : (ev.date ? `${ev.date}T00:00:00Z` : null);\n\n  out.push({\n    json: {\n      source: `MISP — สกมช/NCSA${ev.Orgc?.name ? ' (' + ev.Orgc.name + ')' : ''}`,\n      title: ev.info || `MISP Event ${ev.id}`,\n      link: `${MISP_BASE_URL}/events/view/${ev.id}`,\n      published: publishedIso,\n      content: lines.join('\\n'),\n      misp_event_id: ev.id,\n      misp_uuid: ev.uuid,\n    }\n  });\n}\n\n// ไม่มี event เข้าเกณฑ์ -> คืน array ว่าง ให้ flow จบเงียบ ๆ ไม่สร้าง playbook เปล่า\nreturn out;\n"
+        "jsCode": "// แปลง MISP restSearch response -> รูปแบบเดียวกับ Mock CTI Feed { source, title, link, published, content }\n// สำคัญ: backend /intel/ingest สกัด IoC/CVE/T-code/facts จาก field `content` เอง (regex ฝั่ง server)\n// จึงต้อง \"แบน\" attribute + galaxy(ATT&CK) + tag ของ MISP event ลงเป็นข้อความใน content ให้ regex เดิมจับได้\nconst MISP_BASE_URL = 'REPLACE_WITH_MISP_BASE_URL'; // ต้องตรงกับ node Fetch MISP Events (ห้ามมี / ปิดท้าย)\nconst events = $input.first().json.response ?? [];\n\n// [Option A] จัดอันดับ event ตามความเกี่ยวข้องกับ AD แล้วเลือกเฉพาะ TOP_N ตัวแรก\n// อ้างเกณฑ์คะแนนจากเอกสาร ad-attack-surface-attack-v19.md:\n//   ★★★ AD-specific (ไม่มีความหมายถ้าไม่มี AD) -> weight 100\n//   ★★  สำคัญสูงบน Domain Controller           -> weight 10\n//   ★   พบบ่อยในเส้นทางโจมตี AD                  -> weight 1\n// score ของ event = ผลรวม weight ของ T-code ไม่ซ้ำที่พบใน event (technique ที่ไม่อยู่ในเอกสาร = 0)\n// เรียง score มาก->น้อย (tiebreak: published ใหม่สุดก่อน) แล้วตัดเอา TOP_N\n// ตั้ง TOP_N <= 0 = ไม่จำกัด (gen ทุก event = พฤติกรรมแบบ B)\nconst TOP_N = 3;\n\nconst STAR3 = ['T1078.002','T1098','T1098.007','T1136.002','T1556','T1556.001','T1556.002','T1556.005','T1556.007','T1068','T1134.005','T1484','T1484.001','T1484.002','T1003','T1003.003','T1003.006','T1110.003','T1187','T1552.006','T1557','T1557.001','T1558','T1558.001','T1558.002','T1558.003','T1558.004','T1606.002','T1649','T1069','T1069.002','T1087','T1087.002','T1482','T1615','T1021','T1021.002','T1550.002','T1550.003','T1006','T1036.010','T1207','T1222','T1222.001','T1685.001','T1685.005','T1486','T1489','T1490','T1531','T1071.004'];\nconst STAR2 = ['T1588.002','T1588.006','T1078.001','T1078.003','T1133','T1199','T1047','T1053.005','T1059.001','T1569.002','T1037.001','T1037.003','T1098.005','T1112','T1543.003','T1546.003','T1547.002','T1547.003','T1547.005','T1547.008','T1556.006','T1556.008','T1556.009','T1134','T1134.001','T1134.002','T1134.003','T1003.001','T1003.004','T1003.005','T1040','T1110','T1110.001','T1110.002','T1552','T1552.001','T1552.002','T1552.004','T1555','T1555.004','T1018','T1033','T1046','T1135','T1201','T1021.001','T1021.003','T1021.006','T1072','T1210','T1550','T1563.002','T1570','T1014','T1036','T1036.004','T1036.005','T1070','T1070.003','T1070.004','T1070.006','T1070.009','T1564.002','T1553','T1553.002','T1553.004','T1553.006','T1685','T1685.003','T1686','T1686.003','T1687','T1688','T1689','T1005','T1039','T1074.001','T1119','T1560','T1090','T1105','T1219','T1572','T1041','T1048','T1567','T1485','T1499','T1561.001','T1561.002','T1565.001'];\nconst STAR1 = ['T1589.001','T1589.002','T1589.003','T1590','T1591','T1595.002','T1587.003','T1588.004','T1190','T1566','T1059.003','T1059.005','T1127.001','T1574.001','T1505.005','T1547.001','T1055','T1548.002','T1003.002','T1056.001','T1110.004','T1111','T1528','T1558.005','T1621','T1016','T1049','T1652','T1534','T1027','T1202','T1211','T1216','T1218.005','T1218.011','T1218.014','T1497','T1071.001','T1205','T1030','T1600','T1690'];\nconst TECH_WEIGHT = {};\nfor (const t of STAR3) TECH_WEIGHT[t] = 100;\nfor (const t of STAR2) TECH_WEIGHT[t] = 10;\nfor (const t of STAR1) TECH_WEIGHT[t] = 1;\n\n// [ข้อ 1] map คำใน tag/title/comment -> T-code (กรณี MISP event ไม่มี Galaxy)\n// เก็บเฉพาะ mapping ที่มั่นใจสูง — อย่าเดา เพราะ technique ผิดทำให้ playbook ป้องกันผิดจุด\nconst KEYWORD_TO_TCODE = [\n  ['dll side loading', 'T1574.002'], ['dll side-loading', 'T1574.002'], ['dll sideloading', 'T1574.002'],\n  ['byovd', 'T1068'], ['bring your own vulnerable driver', 'T1068'],\n  ['password spraying', 'T1110.003'], ['brute force', 'T1110'],\n  ['credential dumping', 'T1003'], ['lsass', 'T1003.001'], ['mimikatz', 'T1003.001'],\n  ['kerberoast', 'T1558.003'], ['pass-the-hash', 'T1550.002'], ['pass the hash', 'T1550.002'],\n  ['spearphishing', 'T1566.001'], ['spear phishing', 'T1566.001'], ['phishing', 'T1566'],\n  ['process injection', 'T1055'], ['scheduled task', 'T1053.005'], ['powershell', 'T1059.001'],\n  ['ransomware', 'T1486'],\n];\nfunction mapKeywordsToTcodes(text) {\n  const low = (text || '').toLowerCase();\n  const hits = new Set();\n  for (const [kw, tcode] of KEYWORD_TO_TCODE) { if (low.includes(kw)) hits.add(tcode); }\n  return [...hits];\n}\n\nconst scored = [];\nfor (const wrap of events) {\n  const ev = wrap.Event ?? wrap;\n\n  // รวม attribute ทั้งที่แขวนกับ event ตรง ๆ และที่อยู่ใน MISP Object\n  const attrs = [...(ev.Attribute ?? [])];\n  for (const obj of (ev.Object ?? [])) attrs.push(...(obj.Attribute ?? []));\n\n  const lines = [];\n  if (ev.info) lines.push(ev.info);\n\n  // IoC: ใส่ค่าดิบลงตรง ๆ ให้ regex backend จับ (ip-src/ip-dst, domain/hostname, md5/sha1/sha256, vulnerability=CVE)\n  for (const a of attrs) {\n    if (['link', 'comment', 'text', 'other', 'attachment'].includes(a.type)) continue;\n    const note = a.comment ? ` (${a.comment})` : '';\n    lines.push(`${a.category}/${a.type}: ${a.value}${note}`);\n  }\n\n  // MITRE ATT&CK galaxy -> external_id = T-code (backend สกัดด้วย \\bT\\d{4}(\\.\\d{3})?\\b)\n  for (const g of (ev.Galaxy ?? [])) {\n    for (const cl of (g.GalaxyCluster ?? [])) {\n      const ext = Array.isArray(cl.meta?.external_id)\n        ? cl.meta.external_id.join(' ')\n        : (cl.meta?.external_id ?? '');\n      lines.push(`ATT&CK: ${cl.value ?? ''} ${ext}`.trim());\n    }\n  }\n\n  // Tag ระดับ event (เผื่อ T-code/CVE ถูกแปะเป็น tag แทน galaxy)\n  for (const t of (ev.Tag ?? [])) lines.push(`Tag: ${t.name}`);\n\n  // [ข้อ 1] กู้ technique จากคำใน tag/title/comment เมื่อ event ไม่มี Galaxy\n  const kwText = [ev.info, ...(ev.Tag ?? []).map(t => t.name), ...attrs.map(a => a.comment)].join(' ');\n  const mapped = mapKeywordsToTcodes(kwText);\n  if (mapped.length) lines.push('ATT&CK (keyword-mapped): ' + mapped.join(' '));\n\n  const content = lines.join('\\n');\n\n  // [Option A] คิดคะแนนความเกี่ยวข้อง AD จาก T-code ไม่ซ้ำใน content (ใช้ regex เดียวกับ backend)\n  const tcodes = [...new Set(content.match(/\\bT\\d{4}(?:\\.\\d{3})?\\b/g) || [])];\n  let score = 0;\n  for (const tc of tcodes) score += (TECH_WEIGHT[tc] ?? 0);\n\n  const publishedMs = ev.publish_timestamp\n    ? Number(ev.publish_timestamp) * 1000\n    : (ev.date ? Date.parse(`${ev.date}T00:00:00Z`) : 0);\n  const publishedIso = publishedMs ? new Date(publishedMs).toISOString() : null;\n\n  scored.push({\n    score,\n    publishedMs: publishedMs || 0,\n    json: {\n      source: `MISP — สกมช/NCSA${ev.Orgc?.name ? ' (' + ev.Orgc.name + ')' : ''}`,\n      title: ev.info || `MISP Event ${ev.id}`,\n      link: `${MISP_BASE_URL}/events/view/${ev.id}`,\n      published: publishedIso,\n      content,\n      misp_event_id: ev.id,\n      misp_uuid: ev.uuid,\n    }\n  });\n}\n\n// เรียงตามคะแนน (มาก->น้อย) แล้ว published ใหม่สุดก่อนเมื่อคะแนนเท่ากัน\nscored.sort((a, b) => (b.score - a.score) || (b.publishedMs - a.publishedMs));\n\n// ตัดเอา TOP_N ตัวแรก (TOP_N <= 0 = ไม่จำกัด)\n// event ที่ไม่ถูกเลือกยังไม่ถูก mark-processed จึงมีสิทธิ์ถูกหยิบในรอบถัดไป — ไม่หลุดถาวร\nconst selected = TOP_N > 0 ? scored.slice(0, TOP_N) : scored;\n\n// ไม่มี event เข้าเกณฑ์ -> คืน array ว่าง ให้ flow จบเงียบ ๆ ไม่สร้าง playbook เปล่า\nreturn selected.map(s => ({ json: s.json }));\n"
       },
       "id": "a0000000-0000-4000-8000-000000000020",
       "name": "Normalize MISP Events",
@@ -81,7 +81,31 @@
     },
     {
       "parameters": {
-        "jsCode": "// Mock CTI feed — ของจริงคือ Schedule Trigger + RSS Read (CISA / The Hacker News)\n// จงใจใส่ 2 ข่าวที่เป็น \"เรื่องเดียวกันคนละสำนัก\" เพื่อ demo dedup ข้ามแหล่งข่าว:\n// ข่าวแรกจะได้ status=created ข่าวที่สองต้องได้ status=dedup_hit (อ้าง CVE ชุดเดียวกัน)\nreturn [\n  { json: {\n      source: 'The Hacker News',\n      title: 'New Brute-Force Campaign Targets Active Directory via RDP and Password Spraying',\n      link: 'https://thehackernews.com/2026/08/ad-bruteforce-campaign.html',\n      published: '2026-08-21T02:10:00Z',\n      content: 'Researchers have uncovered a large-scale campaign targeting enterprise Active Directory environments. The attackers perform password spraying (T1110.003) and password guessing (T1110.001) against domain accounts, then move laterally over RDP (T1021.001). Attack traffic originates from 45.155.205[.]233 and 185.220.101[.]45, and tooling is hosted at hxxp://ad-brute-tools[.]top/payload.exe (SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855). The campaign abuses weak password policies, and organizations lagging on CVE-2025-21298 patching face elevated risk. Administrators are urged to enforce account lockout policies and monitor failed logon events.'\n  }},\n  { json: {\n      source: 'CISA',\n      title: 'CISA Advisory: Ongoing Brute-Force Activity Against Active Directory Environments',\n      link: 'https://www.cisa.gov/news-events/alerts/2026/08/21/ad-bruteforce',\n      published: '2026-08-21T06:00:00Z',\n      content: 'CISA is aware of ongoing brute-force activity targeting Active Directory. Threat actors conduct password spraying (T1110.003) and use RDP (T1021.001) for lateral movement, with activity linked to 45.155.205[.]233. Organizations should prioritize remediation of CVE-2025-21298 and review authentication logs.'\n  }}\n];"
+        "url": "http://host.docker.internal:8000/intel/reset",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST"
+      },
+      "id": "a0000000-0000-4000-8000-000000000022",
+      "name": "Reset Intel Store (DEV)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2256,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mock CTI feed — 2 เรื่องคนละภัย (dedup_key ต่างกัน) เพื่อทดสอบว่า Loop Over Items สร้าง playbook 2 ตัว\n// เรื่อง 1: AD brute-force (CVE-2025-21298) · เรื่อง 2: credential dumping/Kerberoasting (CVE-2025-29812)\n// ทั้งคู่ status=created → เข้า loop → ได้ playbook คนละใบ\nreturn [\n  { json: {\n      source: 'The Hacker News',\n      title: 'New Brute-Force Campaign Targets Active Directory via RDP and Password Spraying',\n      link: 'https://thehackernews.com/2026/08/ad-bruteforce-campaign.html',\n      published: '2026-08-21T02:10:00Z',\n      content: \"Researchers have uncovered a large-scale campaign targeting enterprise Active Directory environments. The attackers perform password spraying (T1110.003) and password guessing (T1110.001) against domain accounts, then move laterally over RDP (T1021.001). Attack traffic originates from 45.155.205[.]233 and 185.220.101[.]45, and tooling is hosted at hxxp://ad-brute-tools[.]top/payload.exe (SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855). The campaign abuses weak password policies, and organizations lagging on CVE-2025-21298 patching face elevated risk. Administrators are urged to enforce account lockout policies and monitor failed logon events.\"\n  }},\n  { json: {\n      source: 'CISA',\n      title: 'Credential Dumping and Kerberoasting Campaign Targets Domain Service Accounts',\n      link: 'https://www.cisa.gov/news-events/alerts/2026/08/22/cred-dumping-kerberoast',\n      published: '2026-08-22T06:00:00Z',\n      content: \"A newly observed intrusion set is targeting enterprise Active Directory to harvest credentials. After gaining a foothold, the actors dump credentials from LSASS memory (T1003.001) using a custom tool, then perform Kerberoasting (T1558.003) to crack service account hashes and move laterally via pass-the-hash (T1550.002). Command-and-control traffic was observed to 193.42.33[.]14 and 45.9.148[.]200, with a loader retrieved from hxxp://kerb-dump-tools[.]top/loader.bin (SHA256: 9f2b7c1d4e6a8b0c9f2b7c1d4e6a8b0c9f2b7c1d4e6a8b0c9f2b7c1d4e6a8b0c). The actors leverage CVE-2025-29812 for privilege escalation. Defenders should enable LSASS protection (RunAsPPL), restrict and monitor service account privileges, and alert on anomalous Kerberos TGS requests.\"\n  }}\n];"
       },
       "id": "a0000000-0000-4000-8000-000000000002",
       "name": "Mock CTI Feed",
@@ -139,6 +163,16 @@
                 "type": "string",
                 "operation": "equals"
               }
+            },
+            {
+              "id": "cond-not-processed",
+              "leftValue": "={{ $json.already_processed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
             }
           ],
           "combinator": "and"
@@ -151,19 +185,6 @@
       "typeVersion": 2,
       "position": [
         2816,
-        -272
-      ]
-    },
-    {
-      "parameters": {
-        "maxItems": 1
-      },
-      "id": "a0000000-0000-4000-8000-000000000005",
-      "name": "Limit 1 Story",
-      "type": "n8n-nodes-base.limit",
-      "typeVersion": 1,
-      "position": [
-        3040,
         -272
       ]
     },
@@ -223,7 +244,7 @@
         "method": "POST",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ phase: $json.phase, technique_ids: $('Limit 1 Story').first().json.intel.mitre_techniques, query: `${$('Limit 1 Story').first().json.intel.threat_name} ${$json.phase} defense hardening detection ${$('Limit 1 Story').first().json.intel.mitre_techniques.join(' ')}`, top_k: 5, doc_types: [\"defense\", \"mitre\"] }) }}"
+        "jsonBody": "={{ JSON.stringify({ phase: $json.phase, technique_ids: $('Apply Enrichment').first().json.intel.mitre_techniques, query: `${$('Apply Enrichment').first().json.intel.threat_name} ${$json.phase} defense hardening detection ${$('Apply Enrichment').first().json.intel.mitre_techniques.join(' ')}`, top_k: 5, doc_types: [\"defense\", \"mitre\"] }) }}"
       },
       "id": "a0000000-0000-4000-8000-000000000008",
       "name": "Retrieve Chunks",
@@ -253,7 +274,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ประกอบ prompt เชิงรุก: fill_instruction + facts จากข่าว (verbatim) + IoCs + RAG chunks\nconst intel = $('Limit 1 Story').first().json.intel;\nconst sec = $('Split Out Sections').item.json;\nconst rag = $json;\n\nconst chunks = (rag.chunks ?? []).map((c, i) => `[${i + 1}] (${c.source_doc})\\n${c.text}`).join('\\n---\\n');\nconst missing = rag.missing_techniques ?? [];\n\nconst factsBlock = (intel.facts ?? []).map((f, i) => `(${i + 1}) ${f}`).join('\\n');\nconst iocLines = [\n  ...(intel.iocs.ips ?? []).map(v => `IP: ${v}`),\n  ...(intel.iocs.domains ?? []).map(v => `Domain: ${v}`),\n  ...(intel.iocs.hashes ?? []).map(v => `Hash: ${v}`),\n  ...(intel.iocs.cves ?? []).map(v => `CVE: ${v}`)\n].join('\\n');\n\nconst intelContext = [\n  `Threat report: ${intel.threat_name}`,\n  `Source: ${intel.feed_name} (${intel.link ?? '-'})`,\n  `Techniques: ${intel.mitre_techniques.join(', ')}`\n].join('\\n');\n\nconst missingBlock = missing.length\n  ? `\\n⚠️ ไม่มีข้อมูลใน knowledge base รองรับ technique: ${missing.join(', ')}\\nให้แปะธง ⚠️ ในแถวที่เกี่ยวข้อง และห้ามแต่งขั้นตอนขึ้นเอง`\n  : '';\n\nconst prompt = `คุณเป็น SOC analyst ที่เขียนแผนป้องกันเชิงรุก (Proactive Defense Playbook) จากข่าวกรองภัยคุกคาม\nสำคัญ: องค์กรยังไม่ถูกโจมตี — นี่คือการเตรียมป้องกันล่วงหน้า ไม่ใช่การตอบสนองเหตุการณ์ที่เกิดแล้ว\n\n${sec.fill_instruction}\n\n--- THREAT INTELLIGENCE ---\n${intelContext}\n\n--- FACTS จากข่าว (คัดตรงจากต้นฉบับ) ---\n${factsBlock || '(ไม่มี)'}\n\n--- IoCs ---\n${iocLines || '(ไม่มี)'}\n\n--- KNOWLEDGE BASE (ใช้เฉพาะข้อมูลด้านล่างนี้เท่านั้น ห้ามเพิ่มจากความรู้ตัวเอง) ---\n${chunks || '(ไม่พบข้อมูลรองรับ)'}\n${missingBlock}\n\nเขียนที่ระดับแนวทาง/วิธีการ (procedure) ไม่ผูกกับ OS ใด OS หนึ่ง ยกคำสั่งเป็นตัวอย่างสั้นๆ ได้แต่ห้ามให้คำสั่งเป็นแกนหลักของขั้นตอน\n\nตอบเป็นตาราง Markdown เท่านั้น ไม่ต้องมีคำนำหรือคำสรุป`;\n\nreturn { json: { phase: sec.phase, heading: sec.heading, prompt } };",
+        "jsCode": "// ประกอบ prompt เชิงรุก: fill_instruction + facts จากข่าว (verbatim) + IoCs + RAG chunks\nconst intel = $('Apply Enrichment').first().json.intel;\nconst sec = $('Split Out Sections').item.json;\nconst rag = $json;\n\nconst chunks = (rag.chunks ?? []).map((c, i) => `[${i + 1}] (${c.source_doc})\\n${c.text}`).join('\\n---\\n');\nconst missing = rag.missing_techniques ?? [];\n\nconst factsBlock = (intel.facts ?? []).map((f, i) => `(${i + 1}) ${f}`).join('\\n');\nconst iocLines = [\n  ...(intel.iocs.ips ?? []).map(v => `IP: ${v}`),\n  ...(intel.iocs.domains ?? []).map(v => `Domain: ${v}`),\n  ...(intel.iocs.hashes ?? []).map(v => `Hash: ${v}`),\n  ...(intel.iocs.cves ?? []).map(v => `CVE: ${v}`)\n].join('\\n');\n\nconst intelContext = [\n  `Threat report: ${intel.threat_name}`,\n  `Source: ${intel.feed_name} (${intel.link ?? '-'})`,\n  `Techniques: ${intel.mitre_techniques.join(', ')}`\n].join('\\n');\n\nconst missingBlock = missing.length\n  ? `\\n⚠️ ไม่มีข้อมูลใน knowledge base รองรับ technique: ${missing.join(', ')}\\nให้แปะธง ⚠️ ในแถวที่เกี่ยวข้อง และห้ามแต่งขั้นตอนขึ้นเอง`\n  : '';\n\nconst prompt = `คุณเป็น SOC analyst ที่เขียนแผนป้องกันเชิงรุก (Proactive Defense Playbook) จากข่าวกรองภัยคุกคาม\nสำคัญ: องค์กรยังไม่ถูกโจมตี — นี่คือการเตรียมป้องกันล่วงหน้า ไม่ใช่การตอบสนองเหตุการณ์ที่เกิดแล้ว\n\n${sec.fill_instruction}\n\n--- THREAT INTELLIGENCE ---\n${intelContext}\n\n--- FACTS จากข่าว (คัดตรงจากต้นฉบับ) ---\n${factsBlock || '(ไม่มี)'}\n\n--- IoCs ---\n${iocLines || '(ไม่มี)'}\n\n--- KNOWLEDGE BASE (ใช้เฉพาะข้อมูลด้านล่างนี้เท่านั้น ห้ามเพิ่มจากความรู้ตัวเอง) ---\n${chunks || '(ไม่พบข้อมูลรองรับ)'}\n${missingBlock}\n\nเขียนที่ระดับแนวทาง/วิธีการ (procedure) ไม่ผูกกับ OS ใด OS หนึ่ง ยกคำสั่งเป็นตัวอย่างสั้นๆ ได้แต่ห้ามให้คำสั่งเป็นแกนหลักของขั้นตอน\n\nตอบเป็นตาราง Markdown เท่านั้น ไม่ต้องมีคำนำหรือคำสรุป`;\n\nreturn { json: { phase: sec.phase, heading: sec.heading, prompt } };",
         "mode": "runOnceForEachItem"
       },
       "id": "a0000000-0000-4000-8000-000000000010",
@@ -311,7 +332,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ยุบ 3 items กลับเป็น 1 ก้อน (ฝั่งเชิงรุก — ไม่มี NCSC/CTI enrichment, ใช้ intel + IoC table แทน)\nconst intel = $('Limit 1 Story').first().json.intel;\nconst sections = $input.all().map(i => i.json);\n\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\n\nreturn [{\n  json: {\n    intel_id: intel.intel_id,\n    threat_name: intel.threat_name,\n    technique_ids: intel.mitre_techniques,\n    severity: 'advisory (proactive)',\n    alert: {},\n    sections,\n    missing_techniques: missing,\n    playbook_type: 'proactive',\n    intel_source: {\n      feed: intel.feed_name,\n      title: intel.title,\n      link: intel.link,\n      published: intel.published\n    },\n    iocs: intel.iocs\n  }\n}];"
+        "jsCode": "// ยุบ 3 items กลับเป็น 1 ก้อน (ฝั่งเชิงรุก — ไม่มี NCSC/CTI enrichment, ใช้ intel + IoC table แทน)\nconst intel = $('Apply Enrichment').first().json.intel;\nconst sections = $input.all().map(i => i.json);\n\nconst allRag = $('Retrieve Chunks').all().map(i => i.json);\nconst missing = [...new Set(allRag.flatMap(r => r.missing_techniques ?? []))];\n\nreturn [{\n  json: {\n    intel_id: intel.intel_id,\n    threat_name: intel.threat_name,\n    technique_ids: intel.mitre_techniques,\n    severity: 'advisory (proactive)',\n    alert: {},\n    sections,\n    missing_techniques: missing,\n    playbook_type: 'proactive',\n    intel_source: {\n      feed: intel.feed_name,\n      title: intel.title,\n      link: intel.link,\n      published: intel.published\n    },\n    iocs: intel.iocs\n  }\n}];"
       },
       "id": "a0000000-0000-4000-8000-000000000013",
       "name": "Aggregate Sections",
@@ -427,21 +448,140 @@
     },
     {
       "parameters": {
-        "jsCode": "// รวม playbook + ข้อความแจ้งผู้บริหาร/ฝ่ายไอที เป็นไฟล์ .md เดียว ให้ดาวน์โหลดตรงจาก\n// ผลลัพธ์ execution นี้เลย — ไม่ต้องเอา JSON ไปแปลงที่เครื่องมืออื่นต่อ\nconst playbook = $('Assemble Playbook').first().json.markdown;\nconst notif = $json; // จาก Prepare Notifications: { playbook_id, intel_id, executive_message, it_message }\n\nconst report = [\n  playbook,\n  '',\n  '---',\n  '',\n  '## 📢 ข้อความแจ้งผู้บริหาร',\n  '',\n  '```',\n  notif.executive_message,\n  '```',\n  '',\n  '## 🔧 ข้อความแจ้งฝ่ายไอที / SOC',\n  '',\n  '```',\n  notif.it_message,\n  '```',\n  ''\n].join('\\n');\n\nconst fileName = `playbook_${notif.intel_id}.md`;\nconst buffer = Buffer.from(report, 'utf-8');\n\nreturn [{\n  json: { ...notif, report_filename: fileName },\n  binary: {\n    data: {\n      data: buffer.toString('base64'),\n      mimeType: 'text/markdown',\n      fileName\n    }\n  }\n}];"
+        "jsCode": "// แปลง output สุดท้ายของ pipeline ให้เป็นเอกสาร Markdown เดียว\n// เนื้อหลัก = playbook ฉบับเต็มจาก Assemble Playbook (Part 1/Part 2 + ตารางมาตรการที่ Gemini สร้าง)\n// ต่อท้ายด้วยข้อความแจ้งเตือน (ผู้บริหาร/ไอที) ที่ Prepare Notifications ประกอบไว้เป็นภาคผนวก\n// หมายเหตุ: executive_message / it_message เป็น plain text จัดรูปแบบมาแล้ว จึงห่อ code fence กัน renderer ยุบช่องว่าง\nconst d = $json;\nconst playbookMd = ($('Assemble Playbook').first().json.markdown ?? '').trim();\nconst thai = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\n\nconst md = [\n  '# 🛡️ Omnissiah — Proactive Defense Advisory',\n  '',\n  `> **Playbook ID:** \\`${d.playbook_id ?? '-'}\\`  `,\n  `> **Intel ID:** \\`${d.intel_id ?? '-'}\\`  `,\n  '> **สถานะ:** DRAFT — รอ Human Review Gate ก่อนใช้จริง  ',\n  `> **สร้างเมื่อ:** ${thai}`,\n  '',\n  '---',\n  '',\n  playbookMd || '_(ไม่พบเนื้อหา playbook จาก Assemble Playbook — ตรวจสอบ endpoint /playbooks/assemble)_',\n  '',\n  '---',\n  '',\n  '## 📨 ข้อความแจ้งเตือน (Notifications)',\n  '',\n  '### 📢 สำหรับผู้บริหาร (Executive Summary)',\n  '',\n  '```text',\n  (d.executive_message ?? '(ไม่มีข้อความ)').trim(),\n  '```',\n  '',\n  '### 🔧 สำหรับฝ่ายไอที / SOC',\n  '',\n  '```text',\n  (d.it_message ?? '(ไม่มีข้อความ)').trim(),\n  '```',\n  '',\n  '---',\n  '_สร้างโดยระบบ Omnissiah (อัตโนมัติ) — ยืนยันข้อมูลกับทีม SOC ก่อนตัดสินใจสำคัญ_',\n].join('\\n');\n\nreturn { json: { ...d, markdown: md } };"
       },
-      "id": "e0000000-0000-4000-8000-000000000exq",
-      "name": "Export Report (.md)",
+      "id": "a0000000-0000-4000-8000-000000000021",
+      "name": "Render Markdown",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         5952,
         -272
       ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "options": {
+          "fileName": "={{ 'omnissiah-proactive-' + ($json.playbook_id || 'draft') + '.md' }}",
+          "mimeType": "text/markdown",
+          "encoding": "utf8"
+        }
+      },
+      "id": "a0000000-0000-4000-8000-000000000023",
+      "name": "Markdown to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        6176,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/cti/enrich-hash",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        },
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ hashes: $json.intel.iocs.hashes, existing_techniques: $json.intel.mitre_techniques, max_hashes: 4 }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000024",
+      "name": "Enrich Hashes (VT)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3152,
+        -448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// [ข้อ 2] เอา technique ที่ VT กู้จาก hash มาทับ intel.mitre_techniques แล้วส่งต่อรูปเดิม {status, intel}\n// node ปลายน้ำ (Retrieve Chunks / Build Prompt / Aggregate Sections) อ้าง $('Apply Enrichment') แทนต้นทาง intel เดิม\nconst base = $('Loop Over Items').first().json;\nconst enrich = $json;\nconst intel = { ...base.intel, mitre_techniques: enrich.technique_ids ?? base.intel.mitre_techniques };\nintel.vt_enrichment = {\n  added: enrich.added_techniques ?? [],\n  live_calls: enrich.live_calls ?? 0,\n  rate_limited: enrich.rate_limited ?? false,\n  per_hash: enrich.per_hash ?? [],\n};\nreturn { json: { ...base, intel } };"
+      },
+      "id": "a0000000-0000-4000-8000-000000000025",
+      "name": "Apply Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3152,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a0000000-0000-4000-8000-000000000026",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        3040,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/intel/mark-processed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "REPLACE_WITH_SHARED_SECRET"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event_uuid: $('Loop Over Items').first().json.misp_uuid, playbook_id: $('Save Draft').first().json.playbook_id, threat_name: $('Apply Enrichment').first().json.intel.threat_name }) }}"
+      },
+      "id": "a0000000-0000-4000-8000-000000000027",
+      "name": "Mark Processed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6400,
+        -272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     }
   ],
   "pinData": {},
   "connections": {
     "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Reset Intel Store (DEV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Intel Store (DEV)": {
       "main": [
         [
           {
@@ -478,18 +618,7 @@
       "main": [
         [
           {
-            "node": "Limit 1 Story",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Limit 1 Story": {
-      "main": [
-        [
-          {
-            "node": "Get Sections",
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }
@@ -617,6 +746,28 @@
         ]
       ]
     },
+    "Prepare Notifications": {
+      "main": [
+        [
+          {
+            "node": "Render Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Markdown": {
+      "main": [
+        [
+          {
+            "node": "Markdown to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Schedule Trigger": {
       "main": [
         [
@@ -650,11 +801,56 @@
         ]
       ]
     },
-    "Prepare Notifications": {
+    "Enrich Hashes (VT)": {
       "main": [
         [
           {
-            "node": "Export Report (.md)",
+            "node": "Apply Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Get Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Enrich Hashes (VT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Markdown to File": {
+      "main": [
+        [
+          {
+            "node": "Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Processed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }

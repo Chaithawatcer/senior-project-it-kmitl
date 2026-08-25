@@ -393,3 +393,25 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 | chunk strategy | 1 `### Sub:` = 1 chunk | ไม่ได้ตัดตามจำนวน token |
 | distance metric | `cosine` (`hnsw:space`) | |
 | Escalation SLA (C2–C6) | 15 / 30 / 60 / 240 / 1440 นาที | ค่าตั้งต้นจาก `study/04` — ยังไม่ยืนยันกับอาจารย์ |
+
+---
+
+## 10. Troubleshooting — ปัญหาที่เจอตอนรัน/เดโม (เรียงล่าสุดไว้บน)
+
+### 2026-08-25 — n8n container ออกอินเทอร์เน็ตไม่ได้ (สาเหตุจริง: router บล็อกเครื่อง)
+
+**อาการ:** workflow ใน n8n เรียก API ภายนอกไม่ได้ (timeout) → เข้าใจตอนแรกว่าเป็นปัญหาของ container/Docker
+
+**วิธีวินิจฉัย (ไล่จากในสุดออกนอกสุด):**
+1. ในตัว n8n container — DNS resolve ได้, ping gateway `172.17.0.1` ได้ แต่ HTTPS ออกเน็ต timeout
+2. เทียบ container อื่น + Windows host — MISP container และ host เอง (`Invoke-WebRequest`) ก็ timeout เหมือนกัน → **ไม่ใช่ปัญหาเฉพาะ n8n**
+3. ระดับ host — `ping 192.168.1.1` (router) ได้ แต่ `ping 1.1.1.1`, TCP 443, query DNS `8.8.8.8` ตรง ๆ ล้มเหลวหมด
+4. `tracert 1.1.1.1` — ถึง hop 1 (router) แล้วตายหมด → LAN ปกติ แต่ออก WAN ไม่ได้
+5. ตัดตัวแปร: Docker images/networks ครบ (ไม่เกี่ยวกับการลบ image) · route table สะอาด ไม่มี VPN route · firewall ไม่ block · OpenVPN log = `Exiting due to fatal error` (ต่อไม่สำเร็จ ไม่ได้ทิ้ง kill-switch) · flushdns + release/renew แล้วยัง timeout
+6. **ทดสอบชี้ขาด** — ต่อผ่าน hotspot/เน็ตมือถือ → ใช้ได้ทันที; อุปกรณ์อื่นบน Wi-Fi บ้านวงเดียวกันก็ใช้ได้
+
+**สาเหตุจริง:** router บ้านบล็อกเฉพาะเครื่องนี้ (`LAPTOP-MUMNIAJG`, MAC `14-13-33-88-DF-59`, IP `192.168.1.103`) — อนุญาต LAN แต่ไม่ forward ทราฟฟิกออกเน็ต ลักษณะ pause internet / parental control / MAC filter
+
+**วิธีแก้:** เข้า `http://192.168.1.1` → หาเครื่องจาก hostname/MAC → ปลด Pause/Block ในเมนู Device List / Access Control / MAC Filter · หาไม่เจอให้ restart router (ถอดปลั๊ก 30 วิ) · ชั่วคราวต่อ PC เข้า hotspot มือถือ แล้ว n8n จะออกเน็ตได้เองทันที (ไม่ต้องแตะ container)
+
+**บทเรียน:** n8n/Docker เป็นแค่อาการปลายทาง — เจอ container ออกเน็ตไม่ได้ให้เช็ค host + อุปกรณ์อื่นก่อน · DNS resolve ได้ ไม่ได้แปลว่าเน็ตใช้ได้ (router ตอบจาก cache ได้แม้ WAN ล่ม) ต้อง ping IP ตรง ๆ · `tracert` ชี้ได้เร็วว่าตายที่ hop LAN หรือ WAN
