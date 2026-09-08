@@ -24,6 +24,31 @@ doc_type: defense
 > ต่างกัน (LSASS memory / registry hive / NTDS database / replication) — โครงนี้ช่วยให้ retrieval
 > ดึงได้ถูกชั้น ไม่ว่า alert จะ map มาที่ base technique หรือลงลึกถึง sub (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: credential_exposure_baseline [T1003]
+- จัดทำ **inventory ระบบที่เก็บ credential material** (DC, member server, workstation) และ map บัญชี privileged กับจุดที่ credential ถูก cache — รู้ล่วงหน้าว่าจุดใดเสี่ยงถูก dump
+- ตั้ง **baseline ว่ากระบวนการใดควรเข้าถึง LSASS/SAM/NTDS** ตามปกติ เพื่อให้ตรวจจับ deviation ได้แม่น
+
+### Sub: proactive_lsass_hardening [T1003.001]
+- เปิด **RunAsPPL (LSA Protection) และ Credential Guard ล่วงหน้า** บน endpoint ที่รองรับ, ลด interactive logon ของ admin บนเครื่องทั่วไป (กัน credential ตกค้างใน LSASS)
+
+### Sub: registry_and_cached_hardening_prep [T1003.002, T1003.004, T1003.005]
+- จำกัดสิทธิ์เข้าถึง **SAM/SECURITY/SYSTEM hive และ LSA secrets**, ลด cached logon count เชิงป้องกัน, บังคับ least privilege บนเครื่องที่ไม่ต้องเก็บ cache
+
+### Sub: ntds_and_dcsync_readiness [T1003.003, T1003.006]
+- จำกัดสิทธิ์ **Replicating Directory Changes / Changes-All** ให้เหลือเฉพาะบัญชีระบบ/DC, ตรวจ ACL ของ domain object และสำรอง NTDS.dit อย่างปลอดภัยไว้ก่อน
+
+## Phase: detection_analysis
+### Sub: lsass_access_detection [T1003.001]
+- เฝ้า **Sysmon Event ID 10 (ProcessAccess)** ที่ target `lsass.exe` ด้วย GrantedAccess ผิดปกติ (เช่น 0x1010/0x1410) และการโหลด `comsvcs.dll` MiniDump — เทียบกับ baseline process ที่ควรแตะ LSASS
+- ยืนยันขอบเขต: host, บัญชีที่อาจถูก dump และ timeline ก่อน containment
+
+### Sub: registry_hive_access_detection [T1003.002, T1003.004, T1003.005]
+- ตรวจการเข้าถึง/สำเนา **SAM, SECURITY, SYSTEM hive** และคำสั่ง `reg save`, รวมถึงการอ่าน DPAPI/LSA secrets ผิดปกติ
+
+### Sub: ntds_dcsync_detection [T1003.003, T1003.006]
+- เฝ้า **Security Event 4662** ที่มี GUID ของ DS-Replication-Get-Changes(-All) จาก principal ที่ **ไม่ใช่ DC** (บ่งชี้ DCSync), และการสร้าง/คัดลอก `ntds.dit` ผ่าน VSS
+
 ## Phase: containment
 ### Sub: scope_and_isolate [T1003]
 - **ตัดสินขอบเขตก่อนเลือกมาตรการ**: ถ้าเป็น NTDS/DCSync ให้ถือว่า **ทุก credential ในโดเมนหลุด** (รวม krbtgt) → ยกระดับเป็น domain compromise ทันที; ถ้าเป็น dump บน host เดียว blast radius = เฉพาะบัญชีที่เคยล็อกอินเครื่องนั้น — contain ตามระดับที่ scope ได้

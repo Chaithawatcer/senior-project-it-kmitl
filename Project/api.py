@@ -508,13 +508,38 @@ def cti_enrich_hash(req: CtiHashEnrichRequest):
 
 # ---------------------------------------------------------------- template
 
-# ⚠️ ต้องมีแค่ 3 phase ตรงกับขอบเขต proposal §3.3 และ ARCHITECTURE.md §2 ขั้นที่ 7
-#    (Containment → Eradication → Recovery) — ห้ามเพิ่มกลับเป็น 5 phase แบบ NIST lifecycle
-#    ถ้าจะเพิ่ม phase ใหม่ ต้องได้รับอนุมัติเปลี่ยนขอบเขตจากอาจารย์ที่ปรึกษาก่อน
+# 📋 5 phase มาตรฐาน NIST IR Lifecycle (NIST SP 800-61):
+#    Preparation → Detection & Analysis → Containment → Eradication → Recovery
+#    (ขยายจาก 3 phase เดิมตามที่ได้รับอนุมัติเปลี่ยนขอบเขต — เดิมมีแค่ Containment/Eradication/Recovery)
+#
+# ⚠️ KB CAVEAT: field `phase` เป็น metadata key ที่ KB ใน ChromaDB ผูกไว้ (ดู /retrieve บรรทัด where_clause)
+#    ปัจจุบัน KB tag ไว้แค่ containment/eradication/recovery — 2 phase ใหม่ (preparation, detection_analysis)
+#    ยังไม่มี document ผูก จึง retrieve ได้ chunks ว่าง → ขึ้นธง ⚠️ missing_techniques (ไม่ fabricate)
+#    ต้อง re-tag / re-ingest KB ให้ครอบคลุม 2 phase ใหม่ ถึงจะได้เนื้อหารองรับครบทั้ง 5 phase
 SECTIONS = [
     {
+        "phase": "preparation",
+        "heading": "Phase 1: Preparation",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | การกระทำ | ผู้รับผิดชอบ |\n"
+            "เนื้อหา: การเตรียมความพร้อมเฉพาะเหตุนี้ก่อนลงมือ — ระดมทีมตอบสนอง/กำหนดบทบาทหน้าที่, "
+            "เปิดช่องทางสื่อสารและช่องทางบันทึกเหตุการณ์ (case log), เตรียมเครื่องมือ/สิทธิ์การเข้าถึงที่จำเป็น, "
+            "และเก็บรักษาหลักฐานเบื้องต้น (preserve evidence) ก่อนเริ่ม containment"
+        ),
+    },
+    {
+        "phase": "detection_analysis",
+        "heading": "Phase 2: Detection & Analysis",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | สิ่งที่ต้องตรวจสอบ | แหล่งข้อมูล/log | สิ่งที่บ่งชี้ |\n"
+            "เนื้อหา: ยืนยันและวิเคราะห์เหตุการณ์ — ระบุขอบเขต (scope) และระบบ/บัญชีที่ได้รับผลกระทบ, "
+            "ตรวจ IoC และ mapping กับ MITRE ATT&CK technique ที่เกี่ยวข้อง, ประเมินความรุนแรง/ผลกระทบ "
+            "และลำดับเวลา (timeline) เพื่อกำหนดแนวทาง containment ที่เหมาะสม"
+        ),
+    },
+    {
         "phase": "containment",
-        "heading": "Phase 1: Containment",
+        "heading": "Phase 3: Containment",
         "fill_instruction": (
             "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | คำสั่ง/การกระทำ | ความเสี่ยง | "
             "แยกเป็น short-term containment (หยุดผลกระทบทันที) และ long-term containment "
@@ -523,7 +548,7 @@ SECTIONS = [
     },
     {
         "phase": "eradication",
-        "heading": "Phase 2: Eradication",
+        "heading": "Phase 4: Eradication",
         "fill_instruction": (
             "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | รายละเอียด | เกณฑ์ยืนยันว่าสำเร็จ |\n"
             "เนื้อหา: กำจัดต้นตอ (บัญชี/มัลแวร์/persistence ที่ผู้โจมตีสร้างไว้) และปิดช่องโหว่ที่ถูกใช้โจมตี"
@@ -531,7 +556,7 @@ SECTIONS = [
     },
     {
         "phase": "recovery",
-        "heading": "Phase 3: Recovery",
+        "heading": "Phase 5: Recovery",
         "fill_instruction": (
             "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | รายละเอียด | ผู้ตรวจสอบ/อนุมัติ |\n"
             "เนื้อหา: การทำให้ระบบกลับมาใช้งานได้ตามปกติอย่างปลอดภัย การตรวจยืนยันว่าไม่มีร่องรอยหลงเหลือ "
@@ -541,25 +566,46 @@ SECTIONS = [
 ]
 
 
-# Sections ของ proactive playbook (ARCHITECTURE.md §3 ขั้นที่ 6: แนวทางตรวจสอบผลกระทบ,
-# ขั้นตอนปิดช่องโหว่, ข้อเสนอกฎตรวจจับ — ตาราง IoCs ประกอบใน assemble แบบ deterministic ไม่ใช้ LLM)
+# Sections ของ proactive playbook — 5 phase NIST IR Lifecycle ในมุมมอง "เชิงป้องกันล่วงหน้า"
+# (องค์กรยังไม่ถูกโจมตี — เตรียมรับภัยคุกคามจากข่าวกรอง ไม่ใช่ตอบสนองเหตุที่เกิดแล้ว)
 #
-# ⚠️ field `phase` ยังต้องเป็น 3 ค่าเดิม (containment/eradication/recovery) เพราะเป็น metadata
-# ที่ KB ใน ChromaDB ผูกไว้ — เปลี่ยนแล้ว retrieval จะกรองไม่เจอเงียบ ๆ (HANDOFF.md §4.2)
+# ⚠️ field `phase` ใช้ค่าเดียวกับฝั่งเชิงรับ (preparation/detection_analysis/containment/eradication/recovery)
+# เพราะเป็น metadata ที่ KB ใน ChromaDB ผูกไว้ — เปลี่ยนค่าแล้ว retrieval จะกรองไม่เจอเงียบ ๆ (HANDOFF.md §4.2)
+# 2 phase ใหม่ (preparation, detection_analysis) ยังไม่มี KB tag → ต้อง re-tag/re-ingest KB (ดูหมายเหตุ SECTIONS)
 # สิ่งที่ต่างจากฝั่งเชิงรับคือ heading + fill_instruction เท่านั้น (มุมมองเชิงป้องกัน ไม่ใช่ตอบสนองเหตุ)
 PROACTIVE_SECTIONS = [
     {
-        "phase": "containment",
-        "heading": "Part 1: Impact Assessment & Immediate Hardening",
+        "phase": "preparation",
+        "heading": "Part 1: Readiness & Asset Preparation",
         "fill_instruction": (
-            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | วิธีตรวจสอบ/การกระทำ | สิ่งที่บ่งชี้ว่าได้รับผลกระทบ |\n"
-            "เนื้อหา: องค์กร**ยังไม่ถูกโจมตี** — แนวทางตรวจสอบว่าองค์กรมีความเสี่ยง/ร่องรอยตามภัยคุกคามในข่าวหรือไม่ "
-            "(hunt ด้วย IoC ที่ให้มา) และมาตรการลดพื้นผิวโจมตีที่ทำได้ทันทีระหว่างรอปิดช่องโหว่ถาวร"
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | การเตรียมการ | ผู้รับผิดชอบ |\n"
+            "เนื้อหา: องค์กร**ยังไม่ถูกโจมตี** — การเตรียมความพร้อมเชิงรุกรับภัยคุกคามในข่าว: "
+            "จัดทำ/ทบทวน asset inventory และ baseline ของระบบที่ภัยนี้มักเล็ง, ยืนยันว่ามี log/telemetry "
+            "ที่จำเป็นต่อการตรวจจับ, กำหนดผู้รับผิดชอบและช่องทาง escalation ก่อนภัยมาถึง"
+        ),
+    },
+    {
+        "phase": "detection_analysis",
+        "heading": "Part 2: Risk Assessment & Threat Hunting",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | สิ่งที่ต้องตรวจสอบ | วิธีตรวจสอบ/แหล่งข้อมูล | สิ่งที่บ่งชี้ว่ามีความเสี่ยง/ร่องรอย |\n"
+            "เนื้อหา: ประเมินพื้นผิวโจมตี (attack surface) ขององค์กรเทียบกับภัยคุกคามในข่าว และ "
+            "threat hunting เชิงรุกด้วย IoC ที่ให้มา (ip/domain/hash/CVE) เพื่อหาว่ามีร่องรอยหรือจุดเสี่ยงอยู่แล้วหรือไม่ "
+            "— ยังไม่ยืนยันว่าถูกโจมตี เป็นการค้นหาเชิงป้องกัน"
+        ),
+    },
+    {
+        "phase": "containment",
+        "heading": "Part 3: Immediate Hardening",
+        "fill_instruction": (
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | การกระทำ | ความเสี่ยง/ผลกระทบต่อการใช้งาน |\n"
+            "เนื้อหา: มาตรการลดพื้นผิวโจมตีที่ทำได้ทันที (immediate hardening) ระหว่างรอปิดช่องโหว่ถาวร — "
+            "เช่น จำกัดการเข้าถึง service ที่เสี่ยง, เพิ่ม MFA, ปรับนโยบายชั่วคราว — เชิงป้องกันล่วงหน้า ไม่ใช่การกักกันผู้โจมตี"
         ),
     },
     {
         "phase": "eradication",
-        "heading": "Part 2: Vulnerability Remediation & Hardening",
+        "heading": "Part 4: Vulnerability Remediation & Hardening",
         "fill_instruction": (
             "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | รายละเอียด | เกณฑ์ยืนยันว่าสำเร็จ |\n"
             "เนื้อหา: ขั้นตอนปิดช่องโหว่/จุดอ่อนที่ภัยคุกคามในข่าวใช้ (patch, นโยบายรหัสผ่าน, ปิด service, "
@@ -568,7 +614,7 @@ PROACTIVE_SECTIONS = [
     },
     {
         "phase": "recovery",
-        "heading": "Part 3: Detection Rules & Monitoring",
+        "heading": "Part 5: Detection Rules & Monitoring",
         "fill_instruction": (
             "สร้างตาราง Markdown คอลัมน์: | สิ่งที่ต้องเฝ้าระวัง | แหล่ง log/เครื่องมือ | เงื่อนไขการแจ้งเตือน |\n"
             "เนื้อหา: ข้อเสนอกฎตรวจจับ (detection rules) และการเฝ้าระวังต่อเนื่อง เพื่อให้ตรวจพบได้เร็ว"

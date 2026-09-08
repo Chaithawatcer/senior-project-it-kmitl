@@ -23,6 +23,28 @@ doc_type: defense
 > notification package) — โครงนี้ช่วยให้ retrieval ดึงได้ถูกชั้น ไม่ว่า alert จะ map มาที่ base
 > technique หรือลงลึกถึง sub (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: dc_auth_baseline [T1556]
+- ตั้ง **baseline authentication package/module ที่ LSASS บน DC โหลดตามปกติ** และจำกัดสิทธิ์ที่แก้ authentication process ได้ (Domain Admin/DC access เท่านั้น) — รู้ล่วงหน้าว่าอะไรคือของแท้
+- เปิด **LSA Protection (RunAsPPL)** บน DC เชิงป้องกัน เพื่อกันการ patch/inject authentication logic
+
+### Sub: skeleton_key_readiness [T1556.001]
+- จำกัด **debug privilege บน DC** และเตรียม monitor การ patch memory ของ LSASS — skeleton key ต้องเขียนหน่วยความจำ LSASS บน DC
+
+### Sub: password_filter_readiness [T1556.002]
+- ทำ **inventory Notification Packages** ใน `HKLM\SYSTEM\CurrentControlSet\Control\Lsa` ที่โหลดตอน boot และตั้ง baseline ว่ามี password filter DLL ใดที่ถูกต้อง เพื่อจับ DLL แปลกปลอมภายหลัง
+
+## Phase: detection_analysis
+### Sub: dc_auth_anomaly_detection [T1556]
+- เฝ้า **LSASS บน DC โหลด module/DLL ผิดปกติ**, การ restart LSASS โดยไม่คาดหมาย, และ logon สำเร็จด้วยบัญชี/รหัสที่ไม่ควรใช้ได้ (บ่งชี้ backdoor authentication)
+- ยืนยันขอบเขต: DC ที่กระทบ, บัญชีที่ถูกใช้ และช่วงเวลา
+
+### Sub: skeleton_key_detection [T1556.001]
+- เฝ้า **process access `lsass.exe` บน DC (Sysmon EID 10)** และ pattern แบบ `mimikatz misc::skeleton`, การเปิด debug บน DC
+
+### Sub: password_filter_detection [T1556.002]
+- เฝ้า **registry write ที่ `...\Lsa\Notification Packages`** และการที่ `lsass` โหลด DLL ใหม่ที่ไม่อยู่ใน baseline
+
 ## Phase: containment
 ### Sub: scope_and_isolate [T1556]
 - **ถือเป็น DC compromise**: ทั้งสอง variant ต้องมีสิทธิ์สูงบน DC อยู่ก่อน — ถ้าพบ ให้สันนิษฐานว่าผู้โจมตีมี domain admin แล้ว isolate DC ที่กระทบและเริ่ม scope ว่าถูกยึดตั้งแต่เมื่อไหร่

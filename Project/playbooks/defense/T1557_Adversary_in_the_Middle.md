@@ -23,6 +23,22 @@ doc_type: defense
 > NTLM relay (LLMNR/NBT-NS) — โครงนี้ช่วยให้ retrieval ดึงได้ถูกชั้น ไม่ว่า alert จะ map มาที่
 > base technique หรือลงลึกถึง sub (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: network_auth_baseline [T1557]
+- **map protocol ที่ใช้ name resolution** (LLMNR, NBT-NS, mDNS) และ SMB/LDAP signing posture ล่วงหน้า — ระบุ segment ที่ยังเปิด broadcast resolution เป็นความเสี่ยง AitM
+- จัดทำ baseline ว่า host ใดควรตอบ name query ได้ (DNS server จริง) เพื่อจับ rogue responder ภายหลัง
+
+### Sub: disable_legacy_resolution_prep [T1557.001]
+- เตรียม **GPO ปิด LLMNR/NBT-NS**, บังคับ **SMB signing** และ **LDAP channel binding/signing** เป็น baseline เชิงป้องกัน — ปิดทั้งช่อง poisoning และ NTLM relay ก่อนเกิดเหตุ
+
+## Phase: detection_analysis
+### Sub: poisoning_detection [T1557.001]
+- เฝ้า **LLMNR/NBT-NS response ที่มาจาก host ที่ไม่ใช่ DNS server ปกติ** และการตอบ name query จำนวนมากจาก host เดียว (Responder pattern) — เทียบกับ baseline name-service
+- ยืนยันขอบเขต: host ที่เป็น rogue responder และ client ที่หลงเชื่อ
+
+### Sub: relay_detection [T1557]
+- เฝ้า **NTLM authentication ที่ relay ข้าม host** (source/destination ผิดปกติ) และ inbound SMB signing failure ที่เพิ่มขึ้นผิดปกติ
+
 ## Phase: containment
 ### Sub: isolate_and_scope [T1557]
 - ระบุ **ขอบเขต L2/segment ที่ถูกยึด position**: AiTM ส่วนใหญ่จำกัดอยู่ใน broadcast domain/VLAN เดียว — isolate host/switch port ที่ทำตัวเป็น rogue (ตอบ ARP/DHCP/name query แทนเครื่องจริง) ออกจาก segment ก่อน แล้วค่อยไล่ว่าเป็น variant ไหน

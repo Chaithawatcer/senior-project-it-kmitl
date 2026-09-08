@@ -16,6 +16,29 @@ doc_type: defense
 > `[T1110.003]` คือ control ที่เจาะจงตาม variant เพราะกลไกตรวจจับ/ป้องกันต่างกัน — โครงนี้ช่วยให้
 > retrieval ดึงได้ถูกชั้น ไม่ว่า alert จะ map มาที่ base technique หรือลงลึกถึง sub (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: auth_surface_inventory [T1110]
+- ทำ **inventory ช่องทาง authentication ทั้งหมด** ก่อนถูกโจมตี: VPN, RDP, OWA/Exchange, cloud SSO และ legacy protocol (IMAP/POP3/SMTP AUTH) — ระบุจุดที่ยังไม่มี MFA/rate limit เป็น attack surface ที่ต้องปิดล่วงหน้า
+- จัดทำ **baseline บัญชี high-value** (admin, service account, ผู้บริหาร) ที่มักเป็นเป้า เพื่อเฝ้าระวังเป็นพิเศษ
+
+### Sub: lockout_and_password_policy_prep [T1110.001]
+- ตั้ง **account lockout + password policy (M1036/M1027) เป็น baseline ล่วงหน้า**: min length/complexity, แบน common & breached password list (HaveIBeenPwned k-anonymity), กำหนด lockout threshold ก่อนเกิดเหตุ
+- เตรียม **rate limiting/CAPTCHA แบบ adaptive** ที่ authentication endpoint ให้พร้อมเปิดทันที
+
+### Sub: mfa_conditional_access_prep [T1110.003]
+- เปิด **MFA/conditional access ครอบทุกช่องทางล่วงหน้า** โดยเฉพาะ legacy protocol ที่มัก bypass MFA — ปิดช่องหลักของ password spraying ก่อนภัยมาถึง
+
+## Phase: detection_analysis
+### Sub: failed_logon_analytics [T1110]
+- เฝ้า **Windows Event 4625 (failed logon)** และ **4771 (Kerberos pre-auth fail)** แล้ววิเคราะห์ **per-account attempt rate เทียบกับ distinct-account-per-IP** เพื่อแยกมิติ depth (.001) ออกจาก breadth (.003) ก่อนเลือกมาตรการ
+- ยืนยันขอบเขต: บัญชี/IP/ช่องทางที่เกี่ยวข้อง และมี login สำเร็จตามหลัง fail จำนวนมากหรือไม่ (บ่งชี้บัญชีหลุด)
+
+### Sub: guessing_pattern_detection [T1110.001]
+- ตรวจ **attempt ถี่สูงต่อบัญชีเดียว** จาก source เดียวในหน้าต่างเวลาสั้น (depth) — ตั้ง alert ที่ per-account failed-count
+
+### Sub: spray_pattern_detection [T1110.003]
+- ตรวจ **จำนวนบัญชี distinct ที่ถูกลองจาก IP เดียวสูงผิดปกติ** แม้ความถี่ต่อบัญชีจะต่ำ (หลบ per-account lockout ได้ แต่หลบ per-IP ไม่ได้) — ตั้ง threshold ที่ distinct-account-per-IP-per-hour
+
 ## Phase: containment
 ### Sub: scope_and_lockout [T1110]
 - ช่วงแรกให้ดู **ทั้งสองมิติพร้อมกัน** — depth (เดารหัสบัญชีเดียวรัวๆ, .001) และ breadth (รหัสเดียวหลายบัญชี, .003) — โดยเทียบ per-account attempt rate กับ distinct-account-per-IP ก่อนเลือกมาตรการเจาะจง เพราะ contain ผิดมิติจะพลาด (เช่นตั้ง per-account lockout อย่างเดียว หลบ spraying ได้)

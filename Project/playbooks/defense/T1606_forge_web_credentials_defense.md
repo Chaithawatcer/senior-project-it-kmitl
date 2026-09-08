@@ -21,6 +21,22 @@ doc_type: defense
 > ผูกกับ token-signing certificate ของ IdP — โครงนี้ช่วยให้ retrieval ดึงได้ถูกชั้น ไม่ว่า alert จะ map มาที่ base
 > technique หรือลงลึกถึง sub ได้ (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: federation_baseline [T1606]
+- ทำ **inventory identity provider / token-signing key / SAML certificate** และผู้ที่เข้าถึง ADFS/federation server; ตั้ง baseline การ issue token ปกติ — รู้ว่าใครออก token ได้และเมื่อใด
+- ระบุ blast radius: application/relying party ที่ trust token เหล่านี้
+
+### Sub: saml_key_protection_prep [T1606.002]
+- ป้องกัน **token-signing certificate** ด้วย HSM/least privilege บน ADFS, เตรียมรอบ rotation และ monitor การ export private key — Golden SAML อาศัยการขโมย signing key
+
+## Phase: detection_analysis
+### Sub: token_anomaly_detection [T1606]
+- เฝ้า **authentication ด้วย token ที่ claim/lifetime ผิดปกติ** หรือ issue นอกช่วงเวลาปกติ และ **cloud logon ที่ไม่มี on-prem auth คู่กัน** (บ่งชี้ forged token)
+- ยืนยันขอบเขต: บัญชี/แอปที่ถูกเข้าถึงด้วย token ที่น่าสงสัย
+
+### Sub: golden_saml_detection [T1606.002]
+- เฝ้า **การเข้าถึง/export token-signing certificate บน ADFS** และ event ที่บ่งชี้การอ่าน private key, รวมถึง SAML token ที่ระบบไม่ได้ออกเอง (ไม่มี corresponding issuance log)
+
 ## Phase: containment
 ### Sub: scope_and_blast_radius [T1606]
 - ช่วงแรกมักยังไม่รู้ว่า assertion ถูก forge จากต้นทางใด — ให้ **contain ที่ชั้น trust ของ token ไว้ก่อน** จนกว่าจะ scope ได้ชัดว่า cert/secret ใดรั่ว แล้วค่อยตัดที่เจาะจง

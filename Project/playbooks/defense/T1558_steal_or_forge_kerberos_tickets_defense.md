@@ -25,6 +25,31 @@ doc_type: defense
 > ปกป้องต่างกัน (krbtgt / service account / pre-auth) — โครงนี้ช่วยให้ retrieval ดึงได้ถูกชั้น ไม่ว่า
 > alert จะ map มาที่ base technique หรือลงลึกถึง sub (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: kerberos_hardening_baseline [T1558]
+- จัดทำ **inventory service account ที่มี SPN** และตั้ง baseline อายุ/rotation ของ **krbtgt**; เปิด **AES และปิด RC4** ล่วงหน้า — ลดพื้นผิวทั้ง roasting และ forged ticket
+- รู้ล่วงหน้าว่า TGT/TGS lifetime ปกติเป็นเท่าใด เพื่อจับ ticket อายุยาวผิดปกติภายหลัง
+
+### Sub: krbtgt_and_privileged_prep [T1558.001]
+- ทำ **krbtgt password rotation ตามรอบ (double reset)** เชิงป้องกัน และจำกัดสิทธิ์ที่เข้าถึง krbtgt hash — golden ticket ต้องใช้ krbtgt key
+
+### Sub: service_account_prep [T1558.002, T1558.003]
+- ใช้ **gMSA หรือรหัสยาวสุ่ม** สำหรับ service account และลด SPN ที่ไม่จำเป็น — silver ticket และ kerberoast อาศัย service-account key ที่อ่อน
+
+### Sub: preauth_prep [T1558.004]
+- **บังคับ Kerberos pre-authentication ทุกบัญชี** (ปิด DONT_REQUIRE_PREAUTH) เชิงป้องกัน AS-REP roasting
+
+## Phase: detection_analysis
+### Sub: ticket_anomaly_detection [T1558.001, T1558.002]
+- เฝ้า **TGT/TGS อายุยาวผิดปกติ** และ **encryption downgrade เป็น RC4** ใน Event 4769 (ticket options/etype ผิด baseline), รวมถึง TGS ของ service ที่ไม่ควรถูกร้องขอ
+- ยืนยันขอบเขต: บัญชี/service ที่เกี่ยวข้องและ DC ที่ออก ticket
+
+### Sub: kerberoast_detection [T1558.003]
+- เฝ้า **Event 4769 ที่ขอ TGS จำนวนมากด้วย RC4 (0x17)** จากบัญชีเดียวในเวลาสั้น (pattern การ roast service ticket)
+
+### Sub: asrep_roast_detection [T1558.004]
+- เฝ้า **Event 4768 (AS-REQ) ที่ไม่มี pre-auth** จากบัญชีที่ตั้ง DONT_REQUIRE_PREAUTH
+
 ## Phase: containment
 ### Sub: scope_and_isolate [T1558]
 - ระบุ **ขอบเขตว่าถูกแตะ key ระดับไหน**: ถ้าสงสัย krbtgt หรือ DC ถูกยึด ถือเป็น domain-wide (Golden Ticket forge ได้ทุกบัญชี) — ต่างจากกรณี service account เดียวรั่วที่ blast radius แคบกว่า ให้ contain ตามระดับที่ scope ได้

@@ -22,6 +22,22 @@ doc_type: defense
 > แต่แยกตามจุดตัด (scope/template/CA key/enrollment/monitoring) เพื่อให้ retrieval ดึง control
 > ที่ตรงสถานการณ์ได้ (ARCHITECTURE.md §4.3–4.4)
 
+## Phase: preparation
+### Sub: adcs_baseline_and_template_review [T1649]
+- ทำ **inventory CA, certificate template และ enrollment permission** ล่วงหน้า; ระบุ template ที่เสี่ยง (ESC1–ESC8 misconfig เช่น ENROLLEE_SUPPLIES_SUBJECT + client-auth EKU) และตั้ง baseline การ issue cert ปกติ
+- รู้ล่วงหน้าว่าใคร enroll cert ที่ authenticate ได้บ้าง เพื่อจับการออก cert ผิดปกติภายหลัง
+
+### Sub: ca_key_protection_prep [T1649]
+- ป้องกัน **CA private key ด้วย HSM**, จำกัด role CA administrator/certificate manager, และปิด web enrollment/NTLM relay ที่ไม่จำเป็น — forged cert ต้องอาศัย CA key หรือ template ที่ตั้งผิด
+
+## Phase: detection_analysis
+### Sub: certificate_issuance_detection [T1649]
+- เฝ้า **Event 4886/4887 (cert request/issue) ที่ SAN ไม่ตรงกับ requester** และการ enroll cert ที่ให้ client-authentication โดยบัญชีที่ไม่ควร, รวมถึงการใช้ cert เพื่อ authenticate (**Event 4768 PKINIT**)
+- ยืนยันขอบเขต: cert/template/บัญชีที่เกี่ยวข้องและ CA ที่ออก
+
+### Sub: ca_abuse_detection [T1649]
+- เฝ้า **การเข้าถึง CA private key**, การเปลี่ยน template ACL/setting, และ enrollment ที่ผิด baseline (ปริมาณ/ประเภท/เวลา)
+
 ## Phase: containment
 ### Sub: scope_and_isolate [T1649]
 - **แยกให้ออกว่าเป็น key theft หรือ template abuse**: ถ้าสงสัย **CA private key ถูกขโมย** (Golden Certificate) ให้ถือว่าผู้โจมตี forge cert เป็นใครก็ได้ = domain-wide เทียบเท่า Golden Ticket; ถ้าเป็นการ **abuse template** (ESC1–8) blast radius จำกัดที่ template/สิทธิ์นั้น — contain ตามระดับ
