@@ -21,12 +21,14 @@ OUT_DIR = Path(__file__).parent / "playbooks" / "mitre"
 # technique ที่ KB ปัจจุบันครอบคลุม (credential attack บน AD) — เพิ่มได้เรื่อยๆ ตาม KB ที่โต
 TECHNIQUES = ["T1110", "T1110.001", "T1110.003", "T1078", "T1003.001", "T1550.002", "T1021.001"]
 
-PHASES = ["containment", "eradication", "recovery"]
+# 5 phase NIST IR Lifecycle — ตรงกับ SECTIONS/PROACTIVE_SECTIONS ใน api.py
+# (slug ต้องตรงเป๊ะกับค่า phase ใน api.py: detection_analysis ใช้ _ ไม่ใช่ช่องว่าง/&)
+PHASES = ["preparation", "detection_analysis", "containment", "eradication", "recovery"]
 
 # หมายเหตุออกแบบ: MITRE Mitigations เป็นแนวป้องกันเชิงพฤติกรรม ไม่ได้ผูกกับ phase ใด phase หนึ่ง
 # โดยธรรมชาติ (ต่างจาก threat playbook ที่เขียนแยกขั้นตอนตาม incident lifecycle) แต่ /retrieve
-# กรอง phase แบบ exact match เสมอ (ARCHITECTURE.md §4.3) — จึงจงใจ "ซ้ำเนื้อหาเดิม" ลงทั้ง 3 phase
-# เพื่อให้หา mitigation เจอได้ไม่ว่ากำลังเขียน phase ไหนอยู่ แลกกับพื้นที่เก็บที่มากขึ้น 3 เท่า
+# กรอง phase แบบ exact match เสมอ (ARCHITECTURE.md §4.3) — จึงจงใจ "ซ้ำเนื้อหาเดิม" ลงทั้ง 5 phase
+# เพื่อให้หา mitigation เจอได้ไม่ว่ากำลังเขียน phase ไหนอยู่ แลกกับพื้นที่เก็บที่มากขึ้น 5 เท่า
 # ซึ่งถูกกว่าการเพิ่ม logic กรองแบบ phase-agnostic เข้า /retrieve ตอนนี้ — ควรทบทวนอีกทีตอนทำ
 # tiering เต็มรูปแบบตาม ARCHITECTURE.md §4 (primary/secondary ตาม doc_type)
 
