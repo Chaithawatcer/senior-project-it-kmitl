@@ -513,9 +513,9 @@ def cti_enrich_hash(req: CtiHashEnrichRequest):
 #    (ขยายจาก 3 phase เดิมตามที่ได้รับอนุมัติเปลี่ยนขอบเขต — เดิมมีแค่ Containment/Eradication/Recovery)
 #
 # ⚠️ KB CAVEAT: field `phase` เป็น metadata key ที่ KB ใน ChromaDB ผูกไว้ (ดู /retrieve บรรทัด where_clause)
-#    ปัจจุบัน KB tag ไว้แค่ containment/eradication/recovery — 2 phase ใหม่ (preparation, detection_analysis)
-#    ยังไม่มี document ผูก จึง retrieve ได้ chunks ว่าง → ขึ้นธง ⚠️ missing_techniques (ไม่ fabricate)
-#    ต้อง re-tag / re-ingest KB ให้ครอบคลุม 2 phase ใหม่ ถึงจะได้เนื้อหารองรับครบทั้ง 5 phase
+#    ไฟล์ defense/ + mitre/ tag ครบ 5 phase แล้ว แต่ playbook เชิงรับ 3 ไฟล์ที่ root (playbooks/01-03)
+#    ยังมีแค่ containment/eradication/recovery — phase preparation/detection_analysis จึงได้ chunk จาก defense/mitre เท่านั้น
+#    (technique ที่ไม่มีใน defense/mitre → chunks ว่าง → ขึ้นธง ⚠️ missing_techniques ไม่ fabricate)
 SECTIONS = [
     {
         "phase": "preparation",
@@ -571,17 +571,18 @@ SECTIONS = [
 #
 # ⚠️ field `phase` ใช้ค่าเดียวกับฝั่งเชิงรับ (preparation/detection_analysis/containment/eradication/recovery)
 # เพราะเป็น metadata ที่ KB ใน ChromaDB ผูกไว้ — เปลี่ยนค่าแล้ว retrieval จะกรองไม่เจอเงียบ ๆ (HANDOFF.md §4.2)
-# 2 phase ใหม่ (preparation, detection_analysis) ยังไม่มี KB tag → ต้อง re-tag/re-ingest KB (ดูหมายเหตุ SECTIONS)
+# ดูสถานะ KB ของ 2 phase ใหม่ (preparation, detection_analysis) ในหมายเหตุ SECTIONS
 # สิ่งที่ต่างจากฝั่งเชิงรับคือ heading + fill_instruction เท่านั้น (มุมมองเชิงป้องกัน ไม่ใช่ตอบสนองเหตุ)
 PROACTIVE_SECTIONS = [
     {
         "phase": "preparation",
         "heading": "Part 1: Readiness & Asset Preparation",
         "fill_instruction": (
-            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | การเตรียมการ | ผู้รับผิดชอบ |\n"
+            # ไม่ให้ LLM เขียนคอลัมน์ผู้รับผิดชอบ — /playbooks/assemble เติมให้ท้ายตารางด้วย add_owner_column
+            "สร้างตาราง Markdown คอลัมน์: | ขั้นตอน | การเตรียมการ | ผลลัพธ์ที่ต้องได้ |\n"
             "เนื้อหา: องค์กร**ยังไม่ถูกโจมตี** — การเตรียมความพร้อมเชิงรุกรับภัยคุกคามในข่าว: "
             "จัดทำ/ทบทวน asset inventory และ baseline ของระบบที่ภัยนี้มักเล็ง, ยืนยันว่ามี log/telemetry "
-            "ที่จำเป็นต่อการตรวจจับ, กำหนดผู้รับผิดชอบและช่องทาง escalation ก่อนภัยมาถึง"
+            "ที่จำเป็นต่อการตรวจจับ, เตรียมช่องทางสื่อสารและ escalation ก่อนภัยมาถึง"
         ),
     },
     {
@@ -831,6 +832,235 @@ class AssembleRequest(BaseModel):
     iocs: dict | None = None  # {ips, hashes, domains, cves} — แสดงเป็นตาราง IoC (defang ก่อนเสมอ)
 
 
+# ---------------------------------------------------------------- step owner (Escalation Matrix รายขั้นตอน)
+
+# ตาราง "ขั้นตอนประเภทนี้ ใครลงมือ (R) / ใครอนุมัติ (A) / ติดขัดแล้ว escalate ไปหาใคร" — ต่อยอดจาก ESCALATION_TABLE
+# (ตัวนั้นบอกระดับทั้งเคสว่าใครถูกปลุก ตัวนี้บอกระดับขั้นตอน เช่น isolate network → Infrastructure / Network Team)
+#
+# ทำไม deterministic แทนให้ LLM เติมคอลัมน์ผู้รับผิดชอบเอง: เหตุผลเดียวกับ HANDOFF.md §4.6 — ระบุทีมผิด
+# = งาน containment ตกหล่นระหว่างทีมจริง จึงจับคู่ด้วย keyword ที่ตรวจสอบ/test ได้ และถ้าจับไม่ได้ให้ขึ้น
+# ⚠️ ยังไม่ระบุ ไม่เดาทีมให้ (หลักเดียวกับ no silent fallback §4.3)
+#
+# ⚠️ ชื่อทีมเป็นค่าตั้งต้น — ต้องปรับให้ตรงโครงสร้างองค์กรจริง/ยืนยันกับทีม-อาจารย์ (เหมือน SLA ใน ESCALATION_TABLE)
+# ลำดับใน list = ลำดับความสำคัญ: แถวที่ match หลายหมวด ใช้หมวดแรกเป็นผู้รับผิดชอบหลัก ที่เหลือเป็นผู้ร่วมดำเนินการ
+STEP_OWNER_MATRIX = [
+    {
+        "key": "network_isolation",
+        "label": "แยกเครื่อง/กักกันออกจากเครือข่าย (isolate, VLAN กักกัน)",
+        "keywords": ["isolate", "isolated", "isolation", "vlan", "quarantine", "network adapter",
+                     "กักกัน", "แยกเครื่อง", "ตัดเครือข่าย", "ตัดการเชื่อมต่อ", "ออกจากเครือข่าย"],
+        "responsible": "Infrastructure / Network Team",
+        "approver": "Incident Commander",
+        "escalate_to": "Infrastructure Manager",
+    },
+    {
+        "key": "perimeter_block",
+        "label": "บล็อก IP/พอร์ต/ช่องทางเข้าที่ firewall, WAF, VPN",
+        "keywords": ["firewall", "block ip", "block source", "waf", "geo-block", "geo-blocking", "reverse proxy",
+                     "port", "3389", "smb", "vpn", "rdp gateway", "jump host", "บล็อก", "ไฟร์วอลล์", "พอร์ต"],
+        "responsible": "Infrastructure / Network Team",
+        "approver": "Tier 2 (Incident Responder)",
+        "escalate_to": "Incident Commander",
+    },
+    {
+        "key": "communication",
+        "label": "สื่อสารผู้บริหาร/ฝ่ายกฎหมาย/หน่วยงานภายนอก",
+        "keywords": ["ciso", "executive", "legal", "pdpa", "breach notification", "isp",
+                     "ผู้บริหาร", "กฎหมาย", "สื่อสาร", "หน่วยงานกำกับ"],
+        "responsible": "Incident Commander",
+        "approver": "CISO",
+        "escalate_to": "ผู้บริหารระดับสูง / Legal",
+    },
+    {
+        "key": "evidence",
+        "label": "เก็บรักษาหลักฐาน (log, memory dump, chain of custody)",
+        "keywords": ["evidence", "forensic", "memory dump", "chain of custody", "export", "wevtutil", "winpmem",
+                     "screenshot", "หลักฐาน"],
+        "responsible": "Forensic Analyst",
+        "approver": "Incident Commander",
+        "escalate_to": "Legal / Compliance",
+    },
+    {
+        "key": "endpoint",
+        "label": "กำจัดมัลแวร์/process/persistence บนเครื่อง",
+        "keywords": ["process", "malware", "edr", "antivirus", "defender", "scan", "scheduled task", "registry",
+                     "run key", "persistence", "backdoor", "startup", "local user", "authorized_keys", "sudoers",
+                     "payload", "rootkit", "มัลแวร์", "สแกน"],
+        "responsible": "Endpoint / System Admin",
+        "approver": "Tier 2 (Incident Responder)",
+        "escalate_to": "Incident Commander",
+    },
+    {
+        "key": "identity",
+        "label": "จัดการบัญชี/รหัสผ่าน/สิทธิ์/session (AD, IAM)",
+        "keywords": ["account", "password", "credential", "lockout", "unlock", "disable-adaccount", "mfa", "krbtgt",
+                     "kerberos", "session", "token", "active directory", "protected users", "laps", "privileged",
+                     "ntlm", "บัญชี", "รหัสผ่าน", "สิทธิ์"],
+        "responsible": "IAM / Active Directory Admin",
+        "approver": "Incident Commander",
+        "escalate_to": "IT Security Manager",
+    },
+    {
+        "key": "patching",
+        "label": "แพตช์/ปรับคอนฟิก/hardening ระบบ",
+        "keywords": ["patch", "update", "upgrade", "kb", "cve", "group policy", "gpo", "credential guard", "wdigest",
+                     "nla", "configuration", "config", "hardening", "install", "deploy",
+                     "อัปเดต", "แพตช์", "ติดตั้ง", "ช่องโหว่", "ปรับค่า"],
+        "responsible": "System Admin / Infrastructure Team",
+        "approver": "Change Advisory Board (CAB)",
+        "escalate_to": "IT Manager",
+    },
+    {
+        "key": "service_restoration",
+        "label": "คืนระบบ/แจ้งผู้ใช้และเจ้าของระบบ",
+        "keywords": ["application owner", "help desk", "helpdesk", "restore", "restoration", "business",
+                     "คืนระบบ", "กลับมาใช้งาน", "เจ้าของระบบ", "ผู้ใช้งาน"],
+        "responsible": "Application Owner + Help Desk",
+        "approver": "Incident Commander",
+        "escalate_to": "IT Manager",
+    },
+    {
+        "key": "detection",
+        "label": "เฝ้าระวัง/ตรวจ log/threat hunting/กฎตรวจจับ",
+        "keywords": ["siem", "monitor", "monitoring", "alert", "rule", "hunt", "hunting", "log", "ioc", "dashboard",
+                     "baseline", "event", "sysmon", "wazuh", "telemetry", "เฝ้าระวัง", "ตรวจจับ", "แจ้งเตือน"],
+        "responsible": "Tier 1 (Triage Analyst)",
+        "approver": "Tier 2 (Incident Responder)",
+        "escalate_to": "Incident Commander",
+    },
+]
+
+
+def _keyword_pattern(kw: str) -> re.Pattern:
+    # keyword อังกฤษต้องตรงทั้งคำ (กัน "port" ไป match "report", "log" ไป match "login")
+    # ส่วนภาษาไทยไม่มีช่องว่างคั่นคำ จึงใช้ substring ธรรมดา
+    if re.fullmatch(r"[a-z0-9 ._/-]+", kw):
+        return re.compile(rf"(?<![a-z0-9]){re.escape(kw)}(?:s|es)?(?![a-z0-9])")
+    return re.compile(re.escape(kw))
+
+
+_STEP_OWNER_PATTERNS = {e["key"]: [_keyword_pattern(k) for k in e["keywords"]] for e in STEP_OWNER_MATRIX}
+_TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
+
+
+def match_step_owner(text: str) -> list[dict]:
+    """คืนหมวดใน STEP_OWNER_MATRIX ที่ข้อความขั้นตอน match (เรียงตามลำดับความสำคัญ) — ว่าง = ไม่รู้ว่าใครทำ"""
+    t = text.lower()
+    return [e for e in STEP_OWNER_MATRIX if any(p.search(t) for p in _STEP_OWNER_PATTERNS[e["key"]])]
+
+
+def _table_rows(content: str) -> list[list[str]]:
+    """ดึงแถวข้อมูลจากตาราง Markdown ที่ LLM เขียน (ข้ามหัวตาราง + เส้นคั่น + คอลัมน์เลขลำดับ)"""
+    lines = [line.strip() for line in content.splitlines()]
+    rows = []
+    for i, line in enumerate(lines):
+        if not line.startswith("|") or _TABLE_SEP_RE.match(line):
+            continue
+        if i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1]):
+            continue  # แถวหัวตาราง
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        cells = [c for c in cells if c and not re.fullmatch(r"\d+\.?", c)]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _short_cell(text: str, limit: int = 80) -> str:
+    s = re.sub(r"\s+", " ", text.replace("**", "")).strip()
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
+def _row_owners(cells: list[str]) -> tuple[dict | None, list[str]]:
+    """คืน (หมวดผู้รับผิดชอบหลัก, ทีมร่วมดำเนินการ) ของแถวตาราง — (None, []) = จับคู่ไม่ได้"""
+    # จับคู่เฉพาะ 2 คอลัมน์แรก (ขั้นตอน + การกระทำ) — คอลัมน์หลังเป็นความเสี่ยง/เกณฑ์ยืนยัน
+    # มักมีคำอย่าง "ผู้ใช้งาน"/"log" ที่จะดึงทีมผิดเข้ามา
+    matches = match_step_owner(" ".join(cells[:2]))
+    if not matches:
+        return None, []
+    primary = matches[0]
+    co = list(dict.fromkeys(m["responsible"] for m in matches[1:] if m["responsible"] != primary["responsible"]))
+    return primary, co
+
+
+def _team_scope_table() -> list[str]:
+    return [
+        "| ประเภทขั้นตอน | ผู้รับผิดชอบ (R) | ผู้อนุมัติ (A) | Escalate ไปที่ |",
+        "|---|---|---|---|",
+        *(f"| {e['label']} | {e['responsible']} | {e['approver']} | {e['escalate_to']} |" for e in STEP_OWNER_MATRIX),
+        "",
+    ]
+
+
+def add_owner_column(content: str) -> str:
+    """เติมคอลัมน์ "ผู้รับผิดชอบ" ท้ายทุกตารางใน section (ใช้ฝั่งเชิงรุก) — จับคู่ด้วยกฎเดียวกับ Escalation Matrix เชิงรับ"""
+    lines = content.splitlines()
+    out = []
+    in_table = False
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s.startswith("|"):
+            in_table = False
+            out.append(line)
+            continue
+        body = s[:-1].rstrip() if s.endswith("|") else s
+        if _TABLE_SEP_RE.match(s):
+            out.append(f"{body}|---|")
+        elif i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1].strip()):
+            in_table = True  # แถวหัวตาราง
+            out.append(f"{body} | ผู้รับผิดชอบ |")
+        elif in_table:
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            cells = [c for c in cells if c and not re.fullmatch(r"\d+\.?", c)]
+            primary, co = _row_owners(cells)
+            owner = " + ".join([primary["responsible"], *co]) if primary else "⚠️ ยังไม่ระบุ — ต้องมอบหมาย"
+            out.append(f"{body} | {owner} |")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def build_step_escalation_matrix(sections: list[Section], ncsc: NcscAssessment | None) -> list[str]:
+    """ประกอบหัวข้อ Escalation Matrix รายขั้นตอน (markdown lines) จากแถวตารางใน section ที่ LLM เขียน"""
+    rows = []
+    for sec in sections:
+        for cells in _table_rows(sec.content):
+            primary, co = _row_owners(cells)
+            step = _short_cell(cells[0])
+            if not primary:
+                rows.append(f"| {sec.heading} | {step} | ⚠️ ยังไม่ระบุ — Incident Commander มอบหมาย | - | Incident Commander | - |")
+                continue
+            rows.append(
+                f"| {sec.heading} | {step} | {primary['responsible']} | {', '.join(co) or '-'} | "
+                f"{primary['approver']} | {primary['escalate_to']} |"
+            )
+
+    if not rows:
+        return []
+
+    lines = [
+        "## Escalation Matrix รายขั้นตอน (ผู้รับผิดชอบแต่ละขั้นตอน)",
+        "",
+        "> จับคู่ขั้นตอนกับทีมด้วยกฎตายตัว (ไม่ใช่ LLM) — แถวที่ขึ้น ⚠️ ต้องให้ Incident Commander มอบหมายก่อนเริ่มงาน",
+        "",
+    ]
+    if ncsc:
+        lines += [
+            f"> ถ้าทีมผู้รับผิดชอบดำเนินการไม่ได้ภายใน SLA {ncsc.sla_minutes} นาที ({ncsc.ncsc_category}) "
+            f"ให้ escalate ไปที่ผู้ในคอลัมน์ Escalate และแจ้ง {ncsc.escalation_owner}",
+            "",
+        ]
+    lines += [
+        "| Phase | ขั้นตอน | ผู้รับผิดชอบหลัก (R) | ร่วมดำเนินการ | ผู้อนุมัติ (A) | Escalate ไปที่ |",
+        "|---|---|---|---|---|---|",
+        *rows,
+        "",
+        "### ขอบเขตความรับผิดชอบของแต่ละทีม",
+        "",
+        *_team_scope_table(),
+    ]
+    return lines
+
+
 @app.post("/playbooks/assemble", dependencies=[Depends(verify_key)])
 def assemble(req: AssembleRequest):
     if req.playbook_type == "proactive":
@@ -928,8 +1158,23 @@ def assemble(req: AssembleRequest):
             "",
         ]
 
-    for sec in req.sections:
-        parts += [f"## {sec.heading}", "", sec.content, ""]
+    if req.playbook_type == "proactive":
+        # เชิงรุก: ผู้รับผิดชอบเป็นคอลัมน์สุดท้ายของตารางแต่ละ phase แทนตาราง matrix แยก
+        # ส่วนผู้อนุมัติ/escalate อยู่ในตารางขอบเขตทีมท้ายเอกสาร (ไม่มี NCSC/SLA เพราะยังไม่เกิดเหตุ)
+        for sec in req.sections:
+            parts += [f"## {sec.heading}", "", add_owner_column(sec.content), ""]
+        parts += [
+            "## Escalation Matrix (ขอบเขตความรับผิดชอบของแต่ละทีม)",
+            "",
+            "> คอลัมน์ผู้รับผิดชอบในแต่ละ phase จับคู่ด้วยกฎตายตัว (ไม่ใช่ LLM) — แถวที่ขึ้น ⚠️ ต้องมอบหมายทีมก่อนเริ่มงาน; "
+            "ติดขัดให้ escalate ตามตารางนี้",
+            "",
+            *_team_scope_table(),
+        ]
+    else:
+        for sec in req.sections:
+            parts += [f"## {sec.heading}", "", sec.content, ""]
+        parts += build_step_escalation_matrix(req.sections, req.ncsc)
 
     return {"markdown": "\n".join(parts)}
 

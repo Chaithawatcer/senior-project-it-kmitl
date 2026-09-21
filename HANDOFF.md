@@ -1,7 +1,7 @@
 # HANDOFF — Omnissiah (AI-Driven SOC Copilot)
 
 เอกสารส่งต่องาน สำหรับ **เพื่อนในทีมที่มาทำต่อ** และ **AI assistant ที่รับ context ใหม่**
-อัปเดตล่าสุด: 2026-08-11 (เพิ่ม §0.5 — sync กับ MISP integration ของเพื่อน, แก้ chroma_db เสีย, งานวิจัยเสริมนอก repo บนบรานช์ `proactive-pipeline-1-2-3`)
+อัปเดตล่าสุด: 2026-09-21 (เพิ่ม §0.6 — proactive playbook เจาะจงรายเทคนิค + รายการที่ต้องแก้จากรีวิว output จริง บนบรานช์ `proactive-pipeline-1-2-3`)
 
 > ถ้าคุณเป็น AI assistant: อ่านไฟล์นี้ให้จบก่อนแก้โค้ด ส่วน §4 (ข้อตกลงที่ห้ามพัง) คือสิ่งที่แก้ผิดแล้วระบบพังเงียบ ๆ โดยไม่ error
 
@@ -13,7 +13,7 @@
 
 | ประเด็น | เดิม | แก้เป็น |
 |---|---|---|
-| จำนวน phase ของ playbook | 5 phase ตาม NIST (preparation, detection, containment, eradication, post_incident) | **3 phase ตาม proposal §3.3 และ ARCHITECTURE.md §2**: containment, eradication, recovery — เนื้อหา preparation/detection เดิมย้ายไปเป็น "เอกสารอ้างอิง" ที่หัวไฟล์ playbook แทน (ไม่ถูก ingest แต่ไม่ทิ้ง) |
+| จำนวน phase ของ playbook | 5 phase ตาม NIST (preparation, detection, containment, eradication, post_incident) | **3 phase ตาม proposal §3.3 และ ARCHITECTURE.md §2**: containment, eradication, recovery — เนื้อหา preparation/detection เดิมย้ายไปเป็น "เอกสารอ้างอิง" ที่หัวไฟล์ playbook แทน (ไม่ถูก ingest แต่ไม่ทิ้ง) — ⚠️ **ภายหลังขยายกลับเป็น 5 phase แล้ว ดู §4.2** |
 | Mock alert | SSH brute force บน Linux (`web-server-01`, `/var/log/auth.log`) — ผิด scope proposal §3.1 ที่จำกัดแค่ AD/Windows Event Log | Windows AD Event 4625+4740 (`DC01`, `admin_somchai`, `185.15.58.22`) ตรง schema ที่ `Normalize Alert` เขียนไว้อ่านอยู่แล้ว (`data.win.eventdata.*`) — เดิม mock กับ normalize logic ไม่ตรงกันเอง |
 | NCSC Categorisation + Escalation Matrix | ไม่มีเลย — severity เป็นแค่ Wazuh `rule.level` map ตรง ๆ | endpoint ใหม่ `POST /assess/severity` — deterministic rubric (ดู §4.6) คืน category C2–C6 + escalation tier/owner/SLA ต่อจาก `study/03`, `study/04` |
 | KB (Knowledge Base) | มีแค่ `doc_type=playbook` (3 ไฟล์) — proposal §3.2 ต้องการ 3 ส่วน | เพิ่ม `doc_type` metadata + `doc_type=defense` (1 ไฟล์ตัวอย่าง) + `doc_type=mitre` (7 ไฟล์ ดึงจริงผ่าน `mitreattack-python`) → **11 ไฟล์ 147 chunks** |
@@ -86,7 +86,7 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 | ไฟล์ | ทำอะไร |
 |---|---|
 | `Project/central_schema.py` (ขยาย) | `IntelRecord` + `build_intel_record()`: normalize ข่าว → dedup **ข้ามแหล่งข่าว** (hash จากชุด CVE → technique → title ตามลำดับ) + t0/t1 + `extract_intel_iocs()` (IP/hash/domain/CVE/technique, refang defanged text ก่อน) + `extract_intel_facts()` (ประโยค **verbatim** จากต้นฉบับที่มี IoC — เป็น substring ตรง ไม่มีทาง hallucinate) |
-| `Project/api.py` (ขยาย) | `POST /intel/ingest` + `GET /intel/{id}` (store `_INTEL`), `GET /template/sections?pipeline=proactive` (3 sections เชิงป้องกัน — ใช้ `phase` เดิม 3 ค่าเพื่อไม่แตะ KB metadata), `POST /playbooks/assemble` รองรับ `playbook_type/intel_source/iocs` (ได้ IoC table **defanged**), `POST /notify/messages` (2 ข้อความ, deterministic template) |
+| `Project/api.py` (ขยาย) | `POST /intel/ingest` + `GET /intel/{id}` (store `_INTEL`), `GET /template/sections?pipeline=proactive` (ตอนนั้น 3 sections เชิงป้องกัน — ปัจจุบัน 5 ดู §4.2 — ใช้ค่า `phase` ชุดเดียวกับเชิงรับเพื่อไม่แตะ KB metadata), `POST /playbooks/assemble` รองรับ `playbook_type/intel_source/iocs` (ได้ IoC table **defanged**), `POST /notify/messages` (2 ข้อความ, deterministic template) |
 | `n8n-workflow-proactive.json` (ใหม่) | 17 node: Mock CTI Feed (ข่าว 2 ชิ้น "เรื่องเดียวกันคนละสำนัก" demo dedup) → Ingest Intel → Filter created → Limit 1 → RAG loop (doc_types defense+mitre) → Assemble → Save → Notify Messages → Prepare Notifications |
 
 **การตัดสินใจสำคัญที่ต้องรู้:**
@@ -141,7 +141,7 @@ playbook → **ข้อความแจ้งผู้บริหาร + �
 
 ---
 
-## 0.5 รอบล่าสุด — sync กับ MISP ของเพื่อน + แก้ chroma_db เสีย + งานวิจัยเสริมนอก repo ⭐ ล่าสุด
+## 0.5 sync กับ MISP ของเพื่อน + แก้ chroma_db เสีย + งานวิจัยเสริมนอก repo
 
 ### (ก) sync git + แก้ conflict node export
 
@@ -192,6 +192,46 @@ Windows/Git Bash บางเครื่อง (`UnicodeEncodeError` จาก 
 
 ---
 
+## 0.6 รอบล่าสุด — proactive playbook เจาะจงรายเทคนิค + งานที่ต้องแก้จากการรีวิว output จริง ⭐ ล่าสุด
+
+### (ก) แก้แล้วรอบนี้: playbook ใบหนึ่งมี technique อื่นปน
+
+**อาการ:** รัน MISP event 1683 (AD compromise chain: Kerberoast → DCSync → Golden Ticket → ransomware)
+ได้ใบ `T1078.002` ที่ Part 2/Part 5 เต็มไปด้วยแถวของ T1558.003, T1003.006, T1486 ฯลฯ ส่วนแถวของ T1078.002 เองมีแค่ ⚠️
+
+**สาเหตุ:** node `Split by Technique` แตก 1 event → 1 item ต่อ technique โดยตัดแค่ `intel.mitre_techniques`
+เหลือตัวเดียว แต่ `intel.facts` / `intel.iocs` ยังเป็นของทั้ง event → `Build Prompt` ส่ง facts ของทุก
+technique เข้า LLM (และ KB ไม่มี T1078.002 เลย LLM จึงยืมเนื้อหา technique อื่นมาเติม)
+
+**แก้ (node `Build Prompt` ใน `n8n-workflow-proactive.json` เท่านั้น):**
+1. กรอง facts ก่อนเข้า prompt — แตก fact เป็นรายบรรทัด (fact จาก MISP มักเป็นหลายบรรทัดติดกัน เพราะ
+   `extract_intel_facts` ตัดประโยคที่ `. ! ?` เท่านั้น) แล้วตัดบรรทัดที่อ้าง T-code อื่นแต่ไม่อ้าง technique
+   ของใบนี้ทิ้ง — บรรทัดที่อ้าง parent/sub-technique เดียวกัน (เช่น T1003 ↔ T1003.006) เก็บไว้, บรรทัดที่ไม่มี
+   T-code (IoC/บริบท) เก็บไว้
+2. เพิ่มบรรทัด "ขอบเขต" ใน prompt: playbook นี้ครอบคลุม `${techId}` เท่านั้น ห้ามเขียนแถวของ technique อื่น
+
+**ผล (รันซ้ำ event เดิม ได้ใบ `T1003`):** ไม่มี Kerberoast/Golden Ticket/GPO/ransomware ปนแล้ว
+เนื้อหา DCSync/NTDS.dit ยังอยู่ (ถูกต้อง — T1003.006 เป็น sub-technique ของ T1003)
+
+> ⚠️ แก้แค่ไฟล์ JSON — **ต้อง import workflow ใหม่เข้า n8n** ถึงจะมีผล
+> ⚠️ ข้อจำกัดที่รู้ตัว: บรรทัด IoC ที่ไม่มี T-code แต่ comment พูดถึง technique อื่น (เช่น `attacker host performing DCSync`)
+> ยังผ่านตัวกรอง — ปล่อยให้คำสั่ง "ขอบเขต" ใน prompt คุมแทน
+
+### (ข) ⚠️ ยังต้องแก้ — พบจากรีวิว output ใบ `T1003` (event 1683) เรียงตามความสำคัญ
+
+| # | ปัญหา | สาเหตุ (ที่วิเคราะห์ได้) | แนวทางแก้ที่เสนอ |
+|---|---|---|---|
+| 1 | **Part 3 (Immediate Hardening) มีขั้นตอน incident response หลุดเข้ามา** — รีเซ็ต `krbtgt` สองรอบ/รีเซ็ตรหัสผ่านทั้งโดเมน, "ถือว่า credential ทั้งโดเมนหลุดแล้ว", เก็บหลักฐาน forensic, isolate host — ขัดหลัก "องค์กรยังไม่ถูกโจมตี" และทำให้ผู้บริหารเข้าใจผิดว่าเกิดเหตุแล้ว | KB tag phase `containment` เป็นเนื้อหาตอบสนองเหตุ (reactive) — ฝั่งเชิงรุกใช้ phase เดียวกัน (§4.2) LLM เลยยกมาตรง ๆ | เพิ่มใน `Build Prompt`: ห้ามขั้นตอนที่ต้องมีเหตุเกิดก่อน (isolate, เก็บหลักฐาน, รีเซ็ต krbtgt, assume breach) ให้แปลงเป็นมาตรการป้องกันแทน — ระยะยาว: แยก `doc_type` หรือ tag เนื้อหา proactive ใน KB |
+| 2 | **เนื้อหาซ้ำข้าม Part** — Credential Guard อยู่ใน Part 1-4, จำกัดสิทธิ์ SAM อยู่ Part 1/3/4, อบรมผู้ใช้อยู่ Part 1-3 | แต่ละ phase retrieve ได้ chunk ชุดใกล้กัน และแต่ละ Part generate แยกกัน ไม่รู้ว่า Part อื่นเขียนอะไรไป | ใส่ใน prompt ว่าแต่ละ Part ห้ามครอบคลุมอะไร (เช่น Part 1 = inventory/baseline/log readiness เท่านั้น ห้าม config hardening) หรือส่งหัวข้อที่ Part ก่อนหน้าเขียนแล้วเข้า prompt ถัดไป |
+| 3 | **LLM พิมพ์ภาษาเพี้ยน** — "จัดการระดับโดเมนคอมพิวโต์", "นظอเรนซิก" (มีอักษรอาหรับ `ظ` ปน) | hallucination ระดับ token ของ Gemini | เพิ่ม check ใน `/playbooks/assemble`: ถ้าเจออักษรนอก Thai/Latin/ตัวเลข/สัญลักษณ์ปกติ → ขึ้นธง ⚠️ ให้ reviewer เห็น (ไม่แก้เอง) |
+| 4 | **`STEP_OWNER_MATRIX` จับ keyword ผิด** — แถว EDR "มอนิเตอร์และ**บล็อก**กระบวนการ" ได้ Infrastructure / Network Team (ยืนยันแล้วด้วยการรันตัวจับคู่: match `perimeter_block` จากคำ `บล็อก`) | keyword `บล็อก` กว้างเกิน (substring match) | เปลี่ยนเป็นวลีเจาะจง เช่น `บล็อก ip`, `บล็อกพอร์ต`, `บล็อกที่ firewall` — และไล่ตรวจ keyword สั้น ๆ อื่น (`port` ตรงกับ `report`/`support`, `isp`, `scan`) |
+| 5 | **ข้อความแจ้งฝ่ายไอทียังเขียน "วางแผน patch/hardening ตาม Part 2"** | ค้างจากตอนมี 3 Part — ตอนนี้ hardening คือ Part 3-4 (Part 2 = Threat Hunting) | แก้ข้อความใน `/notify/messages` (`api.py` ส่วน `it_lines`) เป็น "ตาม Part 3-4" |
+| 6 | **หัวข้อ Part ไม่บอก phase NIST** — คนอ่านไม่รู้ว่าเป็น 5 phase | ตั้งใจใช้ชื่อตามงานจริง เพราะชื่อ Containment/Eradication/Recovery ตรงตัวจะสื่อว่าเกิดเหตุแล้ว | ใส่ทั้งสองชื่อ เช่น `Phase 3 — Containment: Immediate Hardening` (แก้ `heading` ใน `PROACTIVE_SECTIONS` เท่านั้น **ห้ามแตะ field `phase`** — §4.2) |
+| 7 | ~~**เอกสารค้างว่าเป็น 3 phase**~~ ✅ **แก้แล้ว** — §3, §4.2 ของไฟล์นี้, `USAGE.md` และคอมเมนต์ใน `api.py` เป็น 5 phase แล้ว | — | เหลือ: playbook เชิงรับ 3 ไฟล์ที่ root (`playbooks/01`–`03`) ยังไม่มี `## Phase: preparation` / `detection_analysis` — เพิ่มแล้วรัน `01_ingest.py` ใหม่ |
+| 8 | **KB ไม่มีข้อมูล T1078.002** (Valid Accounts: Domain Accounts) | มี `mitre/t1078_mitigations.md` (parent T1078) แต่ technique match เป็น substring ทางเดียว — child ไม่ match parent (§5) | เพิ่มไฟล์ defense ของ T1078.002 แล้วรัน `01_ingest.py` ใหม่ — ถ้าไม่เพิ่ม ใบนี้จะมีแต่ ⚠️ (ถูกต้องตาม §4.3 แต่ใช้งานไม่ได้) |
+
+---
+
 ## 1. อ่านอะไรก่อน
 
 | ลำดับ | ไฟล์ | ได้อะไร |
@@ -227,7 +267,8 @@ Windows/Git Bash บางเครื่อง (`UnicodeEncodeError` จาก 
 
 ## 3. Knowledge Base ที่มีอยู่
 
-**17 ไฟล์ · 201 chunks · ครบ 3 phase ทุกไฟล์ (containment/eradication/recovery)** — ครบ 3 ส่วนตาม proposal §3.2 แล้ว (นับใหม่หลัง rebuild `chroma_db/` §0.5(ค) — ตัวเลขนี้คือของจริงล่าสุด)
+**17 ไฟล์ · 5 phase** — ไฟล์ `defense/` + `mitre/` (14 ไฟล์) มีครบ 5 phase (`preparation` · `detection_analysis` · `containment` · `eradication` · `recovery`) แต่ **playbook เชิงรับ 3 ไฟล์ที่ root (`01`–`03`) ยังมีแค่ 3 phase** (containment/eradication/recovery) — ถ้า retrieve phase `preparation`/`detection_analysis` จะได้ chunk จาก defense/mitre เท่านั้น
+(ตัวเลข 201 chunks ที่บันทึกไว้ใน §0.5(ค) นับตอนยังเป็น 3 phase — หลังเพิ่ม 2 phase ต้องรัน `01_ingest.py` ใหม่แล้วนับใหม่)
 
 | doc_type | ไฟล์ | threat_name / technique | ที่มา |
 |---|---|---|---|
@@ -247,7 +288,7 @@ Windows/Git Bash บางเครื่อง (`UnicodeEncodeError` จาก 
 
 **ยังครอบคลุม AD attack surface แค่ ~40-45%** (วิเคราะห์ไว้ครบใน `D:\senior project\AD-Attack-Coverage-Expansion\ATTACK-DETAILS.md` นอก repo — มีไฟล์ตัวอย่างพร้อมเอาเข้า KB จริง 11 ไฟล์ รอตัดสินใจลำดับความสำคัญ)
 
-**หมายเหตุ mitre docs:** เนื้อหาเดียวกันถูก duplicate ลงทั้ง 3 phase โดยตั้งใจ (MITRE Mitigations ไม่ได้ผูก phase ใด phase หนึ่งโดยธรรมชาติ ต่าง จาก threat playbook) เหตุผลเต็มอยู่ในคอมเมนต์ท้าย `gen_mitre_kb.py` — ควรทบทวนอีกทีตอนทำ tiering เต็มรูปแบบ (§6 ข้อ 3)
+**หมายเหตุ mitre docs:** เนื้อหาเดียวกันถูก duplicate ลงทุก phase โดยตั้งใจ (MITRE Mitigations ไม่ได้ผูก phase ใด phase หนึ่งโดยธรรมชาติ ต่าง จาก threat playbook) เหตุผลเต็มอยู่ในคอมเมนต์ท้าย `gen_mitre_kb.py` — ควรทบทวนอีกทีตอนทำ tiering เต็มรูปแบบ (§6 ข้อ 3)
 
 **ต้องดาวน์โหลด STIX data เองก่อนรัน `gen_mitre_kb.py`** (ไม่ commit ไฟล์ ~50MB เข้า git):
 ```bash
@@ -268,14 +309,29 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 ถ้าเปลี่ยนที่ใดที่หนึ่ง vector space จะคนละชุด → retrieval คืน chunk ที่ไม่เกี่ยวเลยโดยไม่มี error
 **เปลี่ยนแล้วต้องรัน `01_ingest.py` ใหม่ทุกครั้ง**
 
-### 4.2 ชื่อ phase ต้องตรง 3 ค่านี้เป๊ะ — **เปลี่ยนจาก 5 เป็น 3 แล้ว**
+### 4.2 ชื่อ phase ต้องตรง 5 ค่านี้เป๊ะ — **ขยายจาก 3 เป็น 5 phase ตาม NIST SP 800-61 แล้ว**
 
-`containment` · `eradication` · `recovery`
+`preparation` · `detection_analysis` · `containment` · `eradication` · `recovery`
 
-ผูกกัน 3 ที่: หัวข้อ `## Phase:` ในไฟล์ playbook → metadata ใน ChromaDB → `SECTIONS[].phase` ใน `api.py`
+ผูกกัน 4 ที่: หัวข้อ `## Phase:` ในไฟล์ playbook → metadata ใน ChromaDB → `SECTIONS[].phase` (เชิงรับ) และ
+`PROACTIVE_SECTIONS[].phase` (เชิงรุก) ใน `api.py`
 สะกดไม่ตรงแม้ตัวเดียว → `where={"phase": {"$eq": ...}}` กรองไม่เจอ → chunks ว่าง
 
-> ⚠️ **ห้ามเพิ่มกลับเป็น 5 phase แบบ NIST lifecycle** โดยไม่คุยกับทีม/อาจารย์ก่อน — ขอบเขต proposal §3.3 ระบุไว้แค่ 3 phase (Containment/Eradication/Recovery) ตรงกับตัวอย่าง Quick Win ที่อาจารย์ให้มาด้วย
+> ℹ️ ประวัติ: รอบ §0 เคยลดจาก 5 เหลือ 3 phase ตาม proposal §3.3 — ต่อมาได้รับอนุมัติเปลี่ยนขอบเขตกลับเป็น 5 phase
+> (commit `97969ca`) ถ้าจะเปลี่ยนจำนวน phase อีก ต้องคุยกับทีม/อาจารย์ก่อน
+
+**ชื่อหัวข้อที่แสดงใน playbook (`heading`) กับค่า `phase` เป็นคนละเรื่องกัน:**
+
+| `phase` (ห้ามเปลี่ยน) | เชิงรับ (`SECTIONS`) | เชิงรุก (`PROACTIVE_SECTIONS`) |
+|---|---|---|
+| `preparation` | Phase 1: Preparation | Part 1: Readiness & Asset Preparation |
+| `detection_analysis` | Phase 2: Detection & Analysis | Part 2: Risk Assessment & Threat Hunting |
+| `containment` | Phase 3: Containment | Part 3: Immediate Hardening |
+| `eradication` | Phase 4: Eradication | Part 4: Vulnerability Remediation & Hardening |
+| `recovery` | Phase 5: Recovery | Part 5: Detection Rules & Monitoring |
+
+ฝั่งเชิงรุกตั้งชื่อหัวข้อตามงานจริงแทนชื่อ NIST ตรงตัว เพราะองค์กรยังไม่ถูกโจมตี — หัวข้อ "Containment/Eradication/Recovery"
+จะสื่อว่าเกิดเหตุแล้ว (แก้ `heading` ได้อิสระ แต่ **ห้ามแตะ `phase`**)
 
 ### 4.3 ไม่มี silent fallback — โดยตั้งใจ
 
@@ -304,12 +360,16 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 
 **`account_privilege`** ตอนนี้มาจาก lookup table hardcode (`ACCOUNT_PRIVILEGE_LOOKUP` ใน `central_schema.py` — ย้ายมาจาก n8n Code node แล้ว) — เป็น stand-in ชั่วคราวแทนการถาม AD group membership จริง ต้องแทนที่ก่อนขึ้นระบบจริง
 
+**Escalation Matrix รายขั้นตอน** (ใครทำขั้นตอนไหน เช่น isolate network → Infrastructure / Network Team) ก็ deterministic เช่นกัน — `STEP_OWNER_MATRIX` ใน `api.py` จับคู่แถวตารางที่ LLM เขียนในแต่ละ phase กับทีมด้วย keyword แล้ว `/playbooks/assemble` ต่อท้ายเป็นตาราง R / ผู้อนุมัติ / Escalate ไปที่ — แถวที่จับคู่ไม่ได้ขึ้น ⚠️ ให้ Incident Commander มอบหมาย ไม่เดาทีมให้ **ชื่อทีมเป็นค่าตั้งต้น ต้องปรับให้ตรงองค์กรจริง** (แก้ที่ list เดียว ไม่ต้องแก้ n8n) — **ฝั่งเชิงรุก** (`playbook_type: "proactive"`) ใช้กฎจับคู่ชุดเดียวกัน แต่เติมเป็นคอลัมน์ "ผู้รับผิดชอบ" ท้ายตารางของทุก Part แทนตาราง matrix แยก (`add_owner_column`) แล้วแนบตารางขอบเขตทีม (R / ผู้อนุมัติ / Escalate) ไว้ท้ายเอกสาร — ไม่มี NCSC/SLA เพราะยังไม่เกิดเหตุ
+
 ### 4.7 ทดสอบแล้ว (ไม่ใช่แค่เขียนแล้วเดา)
 
 รันจำลอง flow เต็มเส้นผ่าน HTTP ตรง (mock alert → normalize → `/assess/severity` → `/template/sections` → `/retrieve` ทั้ง 3 phase → `/playbooks/assemble` → `/playbooks` → `/playbooks/lookup`) ยืนยันว่า:
 - `/assess/severity` ให้ผลตรงตามเฉลย 3 scenario (Domain Admin+สำเร็จ→C2, Domain Admin+ไม่สำเร็จ+CTI unknown→C3, Standard+clean→C6)
 - `/retrieve` เจอ chunk ครบทั้ง 3 phase สำหรับ T1110.001 รวม `doc_type` ทั้ง playbook/defense/mitre และ filter `doc_types` ทำงานถูกต้อง
 - markdown ที่ประกอบออกมามี Alert Context + NCSC/Escalation table + 3 phase section ครบ
+
+> ℹ️ ผลทดสอบชุดนี้รันตอนยังเป็น 3 phase — หลังขยายเป็น 5 phase (§4.2) ยังไม่ได้รันจำลองชุดนี้ซ้ำ
 - dedup lookup คืนค่า `ncsc_category`/`escalation_tier` ที่บันทึกไว้ถูกต้อง
 
 > ✅ **อัปเดต (§0.2): ทดสอบผ่าน n8n จริง (Docker) จบเส้นสำเร็จแล้ว** — ทุก node เขียว ได้ playbook สมบูรณ์ครบทุกส่วน wiring ยืนยันแล้ว 100% (รวมเคส CTI clean และ malicious)
@@ -326,7 +386,7 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 | Coverage tier (full/partial/none) ตาม ARCHITECTURE §4 ยังไม่มี | มี `doc_type` filter แล้วแต่ยังไม่ได้ใช้ตัดสิน tier, ไม่มี similarity threshold | ตอนนี้มีแค่ `missing_techniques` แบบ binary |
 | `t0`/`t1` + dedup มีแล้วสำหรับ **alert ingestion** (`/alerts/ingest`, §0.1) แต่ `t2`–`t6` ยังว่างเสมอ และยังไม่เชื่อมกับ dedup ของ **playbook generation** (`/playbooks/lookup`, คนละ store กัน) | ยังวัด TTR เต็มเส้นไม่ได้ (แค่ t0-t1), race condition ตอนสอง request ยิง `/alerts/ingest` พร้อมกันยังเกิดได้ (`_CASES` เป็น dict เฉย ๆ ไม่มี unique index/lock) | ต้องรวม 2 schema เป็นอันเดียว + เพิ่ม lock ก่อนขึ้นระบบจริง |
 | API key เป็น plaintext ใน `n8n-workflow.json` | ค่าปัจจุบันเป็น placeholder | **ห้าม commit key จริงลงไฟล์นี้เด็ดขาด** |
-| MITRE mitigation chunk ซ้ำ 3 phase | ดู §3 หมายเหตุ | เก็บพื้นที่มากกว่าที่จำเป็น 3 เท่า — ยอมรับได้ตอนนี้ |
+| MITRE mitigation chunk ซ้ำทุก phase | ดู §3 หมายเหตุ | เก็บพื้นที่มากกว่าที่จำเป็น 5 เท่า (ตามจำนวน phase) — ยอมรับได้ตอนนี้ |
 | CTI enrichment เรียก API ภายนอกแบบ sync | `/cti/enrich` ยิง VirusTotal + AbuseIPDB ตรง ๆ (timeout 10s/ตัว) — ถ้า API ล่ม/ช้า จะหน่วงทั้ง workflow, free tier มี rate limit (VT: 4 req/นาที) | demo ถี่ ๆ อาจโดน 429 — node ตั้ง retry 3 ครั้งไว้แล้วแต่ควรรู้ไว้ |
 | `account_privilege` มาจาก hardcode lookup table | ยังไม่ถาม AD จริง (`ACCOUNT_PRIVILEGE_LOOKUP` ใน `central_schema.py`) | ใช้ได้แค่กับ mock/demo ไม่ใช่ของจริง |
 | `chroma_db/` เคยเสีย 1 ครั้งแล้ว (`NotFoundError`, §0.5(ค)) | orphan collection UUID ใน catalog สะสมจากการรัน `01_ingest.py` ซ้ำ | ถ้าเจอ error นี้อีก: หยุด uvicorn → ลบ `chroma_db/` ทั้งโฟลเดอร์ → `PYTHONIOENCODING=utf-8 python 01_ingest.py` |
@@ -357,7 +417,7 @@ curl -L -o Project/mitre_data/enterprise-attack.json \
 - ~~จะรวม `CaseRecord` กับ job payload เดิมของ `Normalize Alert` ยังไง~~ ✅ **ตัดสินใจแล้ว (§0.2 ก): ยึด `CaseRecord` เป็น schema หลักตัวเดียว, `Normalize Alert` ถูกถอดออก**
 - **rubric NCSC ไม่ใช่มาตรฐานทางการ (§4.6)** — ยืมแค่ชื่อระดับ C1-C6 มา ตรรกะตัดสินทีมออกแบบเอง ต้องตกลงกันว่าจะเขียนเล่ม/นำเสนอเรื่องนี้ยังไง + เคสตัวอย่างที่ยังไม่ได้ตัดสิน: alert ใส่ Domain Admin แต่ CTI clean + ยังไม่สำเร็จ → ตอนนี้ได้ **C6 (ต่ำสุด)** เพราะ rubric ต้องมีหลักฐานสนับสนุนอย่างน้อย 1 อย่างถึงเลื่อนระดับ — ถ้าทีมเห็นว่า "เป็น Domain Admin ก็ควรได้สูงกว่า C6" ต้องแก้ if/elif ใน `assess_severity()`
 - **ARCHITECTURE.md §2 ขั้นที่ 5 เขียนว่า NCSC เป็น "LLM node" แต่ implementation จริงเป็น deterministic Python (§4.6)** — ยอมรับการเบี่ยงนี้ไหม หรือปรับถ้อยคำ ARCHITECTURE.md ให้ตรงกับของจริง
-- **MITRE mitigation chunk ที่ duplicate ลง 3 phase (§3)** — ทางออกชั่วคราว ควรทำ retrieval แบบ phase-agnostic สำหรับ `doc_type=mitre` จริงจังกว่านี้ไหม
+- **MITRE mitigation chunk ที่ duplicate ลงทุก phase (§3)** — ทางออกชั่วคราว ควรทำ retrieval แบบ phase-agnostic สำหรับ `doc_type=mitre` จริงจังกว่านี้ไหม
 - **จะย้ายไป `google-genai` SDK ไหม** — `requirements.txt` ยังใช้ `google-generativeai` ซึ่ง Google deprecate แล้ว ตอนนี้ n8n เรียก REST ตรงจึงยังไม่กระทบ แต่ถ้าจะเขียน LLM logic ฝั่ง Python ต้องเลือก
 - ~~logic จะอยู่ที่ n8n หรือ FastAPI ทั้งหมดไหม~~ ✅ **แก้แล้ว (§0.2 ก): logic ทั้งหมดอยู่ FastAPI/`central_schema.py` แล้ว — n8n เหลือแค่ orchestrate + Code node เล็ก ๆ (Build Prompt/Extract/Aggregate) ที่เป็นการจัดรูป payload ไม่ใช่ business logic**
 - **จะรองรับ MITRE technique ระดับ parent หรือ sub เท่านั้น** — เกี่ยวกับ §5 เรื่อง substring match

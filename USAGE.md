@@ -86,7 +86,7 @@ cd Project
 python 01_ingest.py
 ```
 
-ผลลัพธ์: ตารางสรุปจำนวน chunks แยกตาม phase และโฟลเดอร์ `chroma_db/` ถูกสร้าง (ตอนนี้ควรเห็น 3 phase: containment/eradication/recovery)
+ผลลัพธ์: ตารางสรุปจำนวน chunks แยกตาม phase และโฟลเดอร์ `chroma_db/` ถูกสร้าง (ตอนนี้ควรเห็น 5 phase: preparation/detection_analysis/containment/eradication/recovery)
 
 **ต้องรันขั้นนี้ก่อนเสมอ** — `api.py` ใช้ `get_collection()` ถ้ายังไม่มี collection ชื่อ `omnissiah_procedures` จะ crash ตอน startup ทันที
 
@@ -175,8 +175,8 @@ Manual Trigger
   → Ingest Alert            POST /alerts/ingest     normalize → CaseRecord + dedup + t0/t1 + observables
   → CTI Enrichment          POST /cti/enrich        เช็ค IP กับ VirusTotal + AbuseIPDB → cti_verdict
   → Assess Severity         POST /assess/severity   ได้ NCSC category + Escalation Matrix (ใช้ cti_verdict จริง)
-  → Get Sections            GET /template/sections   ได้ 3 phase (containment/eradication/recovery)
-  → Split Out Sections      แตกเป็น 3 item
+  → Get Sections            GET /template/sections   ได้ 5 phase (preparation/detection_analysis/containment/eradication/recovery)
+  → Split Out Sections      แตกเป็น 5 item
   ┌─ วนต่อ phase ─────────────────────────────────┐
   │ → Retrieve Chunks       POST /retrieve         ค้น ChromaDB ตาม phase + technique (+ doc_type ถ้าระบุ)
   │ → Rate Guard            หน่วงเวลากัน Gemini rate limit
@@ -184,7 +184,7 @@ Manual Trigger
   │ → Gemini Generate       gemini-flash-lite-latest
   │ → Extract Section       ดึงข้อความออกจาก response
   └────────────────────────────────────────────────┘
-  → Aggregate Sections      รวม 3 phase + แนบผล CTI + Assess Severity
+  → Aggregate Sections      รวม 5 phase + แนบผล CTI + Assess Severity
   → Assemble Playbook       POST /playbooks/assemble   ได้ markdown (มี CTI + NCSC/Escalation table)
   → Save Draft              POST /playbooks            เก็บสถานะ draft + ncsc_category + escalation_tier
 ```
@@ -200,13 +200,13 @@ Manual Trigger
                                                      + สกัด facts (verbatim) / IoCs / techniques
   → Filter New Intel        เอาเฉพาะ status=created (ข่าวซ้ำโดน dedup_hit ตัดทิ้งตรงนี้)
   → Limit 1 Story           กัน Gemini ถูกยิงหลายเรื่องในรอบ demo เดียว
-  → Get Sections            GET /template/sections?pipeline=proactive  ได้ 3 sections เชิงป้องกัน
-  → Split Out Sections      แตกเป็น 3 item
+  → Get Sections            GET /template/sections?pipeline=proactive  ได้ 5 sections เชิงป้องกัน (Part 1-5)
+  → Split Out Sections      แตกเป็น 5 item
   ┌─ วนต่อ section ────────────────────────────────┐
   │ → Retrieve Chunks       POST /retrieve          doc_types: ["defense","mitre"] (บริบทเชิงป้องกัน)
   │ → Rate Guard → Build Prompt (facts+IoCs+chunks) → Gemini Generate → Extract Section
   └────────────────────────────────────────────────┘
-  → Aggregate Sections      รวม 3 sections + intel_source + iocs
+  → Aggregate Sections      รวม 5 sections + intel_source + iocs
   → Assemble Playbook       POST /playbooks/assemble   ได้ Proactive Defense Playbook + IoC table (defanged)
   → Save Draft              POST /playbooks
   → Notify Messages         POST /notify/messages      สร้างข้อความผู้บริหาร + ข้อความฝ่ายไอที
@@ -228,10 +228,10 @@ Manual Trigger
 | POST | `/intel/ingest` | ⭐ ใหม่ — เชิงรุก [1-3]: รับข่าวจาก feed → IntelRecord + dedup ข้ามแหล่งข่าว + สกัด facts (verbatim)/IoCs/techniques |
 | GET | `/intel/{intel_id}` | ⭐ ใหม่ — ดึง intel record ที่ ingest ไว้ |
 | POST | `/cti/enrich` | เช็ค IP กับ VirusTotal + AbuseIPDB → `cti_verdict` (ต้องตั้ง env key ทั้งสอง ไม่งั้นได้ `unknown`) |
-| GET | `/template/sections` | คืนโครง 3 sections — default เชิงรับ (Phase 1-3), `?pipeline=proactive` ได้ชุดเชิงป้องกัน (Part 1-3) |
+| GET | `/template/sections` | คืนโครง 5 sections (NIST SP 800-61) — default เชิงรับ (Phase 1-5), `?pipeline=proactive` ได้ชุดเชิงป้องกัน (Part 1-5) |
 | POST | `/assess/severity` | NCSC Categorisation (C2–C6) + Escalation Matrix แบบ deterministic |
 | POST | `/retrieve` | hybrid retrieval — กรอง `phase` (+ `doc_types` ถ้าระบุ) ที่ Chroma แล้วกรอง `technique_ids` ที่ Python |
-| POST | `/playbooks/assemble` | ประกอบ markdown + ธง DRAFT / Coverage Warning / CTI / NCSC-Escalation — ฝั่งรุกส่ง `playbook_type: "proactive"` + `intel_source` + `iocs` ได้ IoC table (defanged) |
+| POST | `/playbooks/assemble` | ประกอบ markdown + ธง DRAFT / Coverage Warning / CTI / NCSC-Escalation + Escalation Matrix รายขั้นตอน (ใครรับผิดชอบ/อนุมัติ/escalate แต่ละขั้น) — ฝั่งรุกส่ง `playbook_type: "proactive"` + `intel_source` + `iocs` ได้ IoC table (defanged) |
 | GET | `/playbooks/lookup` | เช็ค dedup ด้วย `technique_ids` + `threat_name` |
 | POST | `/playbooks` | บันทึก playbook (รวม `ncsc_category`, `escalation_tier`, `case_id`/`intel_id`) |
 | POST | `/notify/messages` | ⭐ ใหม่ — สร้างข้อความแจ้ง 2 ฉบับ: ผู้บริหาร (ไม่มีศัพท์เทคนิค) + ฝ่ายไอที (technique/IoC defanged/ขั้นตอน) — deterministic template ไม่ใช่ LLM |
@@ -323,7 +323,7 @@ doc_type: playbook
 กติกา:
 
 - **ต้องมี frontmatter** ไม่งั้นไฟล์ถูกข้ามพร้อม warning สีเหลือง
-- `## Phase:` ต้องใช้ชื่อตรงกับ **3 ค่านี้เท่านั้น**: `containment`, `eradication`, `recovery` — ตรงกับ scope proposal §3.3 (ห้ามเพิ่ม preparation/detection/post_incident กลับมาโดยไม่คุยกับทีมก่อน — ดู HANDOFF.md §4.2) ถ้าสะกดไม่ตรง `/retrieve` จะกรองไม่เจอและคืน chunks ว่าง
+- `## Phase:` ต้องใช้ชื่อตรงกับ **5 ค่านี้เท่านั้น**: `preparation`, `detection_analysis`, `containment`, `eradication`, `recovery` (NIST SP 800-61 — ดู HANDOFF.md §4.2) ถ้าสะกดไม่ตรง `/retrieve` จะกรองไม่เจอและคืน chunks ว่าง
 - `doc_type` เป็น `playbook` (default ถ้าไม่ใส่), `defense`, หรือ `mitre` — ใช้กรองผ่าน `/retrieve`'s `doc_types` param ได้
 - 1 `### Sub:` = 1 chunk
 - แก้เสร็จต้องรัน `python 01_ingest.py` ใหม่ (รองรับ subfolder แล้ว ไม่ต้องย้ายไฟล์มาไว้ระดับบนสุด)
